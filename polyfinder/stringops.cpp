@@ -42,3 +42,10 @@ stringstream hexmask_representation(uint128_t mask)
     hexmask << hex << setw(16) << (uint64_t)(mask);
     return hexmask;
 }
+
+stringstream generate_fname(uint32_t thread, uint32_t step)
+{
+    stringstream fname;
+    fname << thread << "_" << step << ".cached";
+    return fname;
+}

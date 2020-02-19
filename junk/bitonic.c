@@ -8,126 +8,24 @@
 #include <math.h>
 
 typedef unsigned int uint128_t __attribute__((mode(TI)));
-typedef __int128 int128_t;
-
 typedef struct {
   uint128_t key;
   uint64_t exp1, exp2;
 } __attribute__((packed)) entry;
-
-struct timeval startwtime, endwtime;
-double seq_time;
-
 uint64_t N, n; 
 entry* a; 
 
 int threadlayers;
 
-static uint128_t mask;
-
 const int ASCENDING = 1;
 const int DESCENDING = 0;
 
-void init(void);
-void print(void);
-void test(void);
-inline void exchange(uint64_t i, uint64_t j);
-void compare(uint64_t i, uint64_t j, int dir);
 void bitonic_merge(uint64_t lo, uint64_t cnt, int dir);
-void parallel_sort(void);
 void* sort(void* arg);
 void* merge(void* arg);
 
-int sorting_function_desc(const void *a, const void *b) 
-{ 
-    entry *ia = (entry *)a;
-    entry *ib = (entry *)b;
-
-    if ((ia->key ) > (ib->key ))
-    {
-        return -1;
-    }
-    else if ((ia->key )  < (ib->key ) )
-    {
-        return 1;
-    }
-    else
-    {
-        return 0;
-    }
-}
-
-int sorting_function_asc(const void *a, const void *b) 
-{ 
-    entry *ia = (entry *)a;
-    entry *ib = (entry *)b;
-
-    if ((ia->key ) > (ib->key ))
-    {
-        return 1;
-    }
-    else if ((ia->key )  < (ib->key) )
-    {
-        return -1;
-    }
-    else
-    {
-        return 0;
-    }
-}
-
-
-void test() {
-  int pass = 1;
-  uint64_t i;
-  for (i = 1; i < N; i++) {
-    pass &= (a[i-1].key <= a[i].key);
-  }
-
-  printf(" TEST %s\n",(pass) ? "PASSed" : "FAILed");
-}
-
-/** the main program **/
-int main(int argc, char** argv)
-{
-
-    if (argc != 3 || atoi(argv[2]) > 256)
-    {
-        printf("Usage: %s q t\n  where n=2^q is problem size (power of two), and t is the number of threads, <=256, to use.\n", argv[0]);
-        exit(1);
-    }
-
-    N = 1 << atoi(argv[1]);
-    n = atoi(argv[2]);
-
-    threadlayers = atoi(argv[2]);
-
-    if (threadlayers != 0 && threadlayers != 1)
-    {
-        --threadlayers;
-    }
-
-    a = (entry*)malloc(N * sizeof(entry));
-
-    init();
-    gettimeofday(&startwtime, NULL);
-    parallel_sort();
-    gettimeofday(&endwtime, NULL);
-    seq_time = (double)((endwtime.tv_usec - startwtime.tv_usec) / 1.0e6 + endwtime.tv_sec - startwtime.tv_sec);
-    printf("Bitonic parallel recursive with qsort and %i threads wall clock time = %f\n", 1 << atoi(argv[2]), seq_time);
-    test();
-
-}
-
-void init()
-{
-    uint64_t i;
-
-    for (i = 0; i < N; i++)
-    {
-        a[i].key = rand() % N;
-    }
-}
+inline void exchange(uint64_t i, uint64_t j);
+inline void compare(uint64_t i, uint64_t j, int dir);
 
 inline void exchange(uint64_t i, uint64_t j)
 {
@@ -243,15 +141,15 @@ void* sort(void* arg)
             arg1.cnt = k;
             arg1.dir = ASCENDING;
             arg1.layer = layer + 1;
-            arg1.asc = sorting_function_asc;
-            arg1.desc = sorting_function_desc;
+            arg1.asc = ((sarg*)arg)->asc;
+            arg1.desc = ((sarg*)arg)->desc;
 
             arg2.lo = lo + k;
             arg2.cnt = k;
             arg2.dir = DESCENDING;
             arg2.layer = layer + 1;
-            arg2.asc = sorting_function_asc;
-            arg2.desc = sorting_function_desc;
+            arg2.asc = ((sarg*)arg)->asc;
+            arg2.desc = ((sarg*)arg)->desc;
 
             pthread_create(&thread1, NULL, sort, &arg1);
             pthread_create(&thread2, NULL, sort, &arg2);
@@ -273,8 +171,16 @@ void* sort(void* arg)
     return 0;
 }
 
-void parallel_sort()
+void parallel_sort(entry* a, uint64_t size, int threads, int (*)(const void *, const void *) sorting_function_asc, int (*)(const void *, const void *)sorting_function_desc)
 {
+    threadlayers = threads;
+    N = size;
+
+    if (threadlayers != 0 && threadlayers != 1)
+    {
+        --threadlayers;
+    }
+
     sarg arg;
     arg.lo = 0;
     arg.cnt = N;

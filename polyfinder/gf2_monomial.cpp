@@ -67,3 +67,12 @@ inline uint128_t gf2x_exp(uint128_t x, uint128_t n, uint128_t poly)
 
     return gf2x_multiply(x, y, f, poly);
 }
+
+inline uint128_t next_monomial(uint128_t px, uint128_t f, uint128_t poly)
+{
+    px <<= 1;
+    if ((px & f) != 0){
+        px ^= poly;
+    }
+    return px;
+}
