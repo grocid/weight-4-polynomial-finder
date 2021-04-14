@@ -1,0 +1,15 @@
+{
+  "name": "polyfinder",
+  "files": [ { "git": 1 } ],
+  "build": {
+    "directory": "polyfinder",
+    "targets": [
+      {"name":"all", "build_cmd":"make -C polyfinder all"},
+      {"name":"clean", "build_cmd":"make -C polyfinder clean"}
+    ],
+    "default_target": "all",
+    "clean_target": "clean",
+    "build": "make all",
+    "clean": "make clean"
+  }
+}
