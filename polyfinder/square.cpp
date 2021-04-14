@@ -155,8 +155,7 @@ void in_memory_merge(uint128_t mask, int thread)
                 cout << polynomial_representation(exponents).str() << endl;
             }
         }
-
-        //delete collision_layer[THREADS * i + thread];
+        collision_layer[THREADS * i + thread].clear();
     }
 }
 
