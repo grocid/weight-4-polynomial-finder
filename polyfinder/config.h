@@ -1,7 +1,9 @@
 #pragma once
 
 //This no longer needs to be prime :D
-#define THREADS 23
+//TODO use this to distribute the thread local searches (and reduce the cmap size)
+#define BUCKETS (65536/8)
+#define THREADS 8
 #define BETA    1
 #define ALPHA   1
 //#define SEED    (time(NULL)+1)
@@ -27,7 +29,8 @@ typedef unsigned __int128 uint128_t;
 #include "gf2_monomial.cpp"
 
 static constexpr uint32_t polynomial_degree = get_degree(POLY);
+static constexpr uint32_t log_mdrop = get_degree(BUCKETS*THREADS);
 static constexpr uint64_t masklen = polynomial_degree/3-2;
 static constexpr uint64_t imasklen = (polynomial_degree+1)-masklen;
-static constexpr uint64_t masklenb = (masklen+7)/8;
+static constexpr uint64_t masklenb = (masklen-log_mdrop+7)/8;
 static constexpr uint64_t imasklenb = (imasklen+7)/8;

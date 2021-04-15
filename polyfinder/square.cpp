@@ -29,6 +29,11 @@ PUREFUN inline constexpr uint32_t phi(uint128_t val)
     return val % THREADS;
 }
 
+PUREFUN inline constexpr uint128_t iphi(uint128_t val)
+{
+    return val / THREADS;
+}
+
 #ifdef __GNUC__
 #define PACKSTRUCT __attribute__((__packed__))
 #else
@@ -76,6 +81,8 @@ PUREFUN constexpr inline mask_t pack_mask(uint128_t mask) {
     mask_t rv = {};
     for (uint i = 0; i < masklenb; i++)
         rv.mask[i] = mask >> (8*i);
+    if (unlikely(mask >> (8*masklenb) != 0))
+        cerr << "Error in mask reduction" << endl;
     return rv;
 }
 
@@ -171,7 +178,7 @@ void in_memory_generate(uint32_t thread)
     uint32_t added = 0;
 #endif
     uint128_t px = 1;
-    map_t<mask_t, cmap_poly> collision_map;
+    map_t<mask_t, cmap_poly> collision_map[BUCKETS];
     
     for(uint64_t i = 0; i < total_map_size; ++i)
     {
@@ -180,13 +187,14 @@ void in_memory_generate(uint32_t thread)
         // the phi condition.
         uint128_t mpx = get_mask_bits(px);
         idx = phi(mpx);
-
         if (unlikely(idx == thread))
         {
             exp_t pexp = pack_exp(exponent);
-            mask_t mbits = pack_mask(mpx);
+            //We already know that the phi matches so drop it
+            uint32_t bucket = (mpx / THREADS) % BUCKETS;
+            mask_t mbits = pack_mask(mpx / (THREADS*BUCKETS));
             imask_t imbits = pack_imask(get_imask_bits(px));
-            auto [it, result] = collision_map.try_emplace(
+            auto [it, result] = collision_map[bucket].try_emplace(
                 mbits, cmap_poly{imbits, pexp}
             );
 
@@ -412,6 +420,7 @@ int main()
     cout << "Seed:        " << SEED << endl;
     cout << "Mask:        " << hexmask_representation(mask).str() << endl;
     cout << "Mask bits:   " << masklen << endl;
+    cout << "l2(mred):    " << log_mdrop << endl;
     cout << "Cmap size:   " << sizeof(pair<mask_t, cmap_poly>) << endl;
     cout << "Clay size:   " << sizeof(pair<imask_t, clay_poly>) << endl;
     cout << "Exp size:    " << sizeof(exp_t) << endl;
