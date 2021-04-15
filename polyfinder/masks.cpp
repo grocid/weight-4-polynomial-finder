@@ -43,13 +43,13 @@ inline void gen_mask_fun(const char *name, const int masklen, const uint maskbit
     for (int i = 0; i < masklen; i++) {
         cout << "| (((px >> " << maskbits[i]-i << ") & (((uint128_t)1) << "<< i <<"))) ";
     }
-    cout << "; }" << endl;    
+    cout << "; }" << endl;
 }
 
 int main() 
 { 
     uint64_t maskseed = SEED;
-    uint128_t mask = random_mask(0, polynomial_degree/3-2, polynomial_degree, maskseed);
+    uint128_t mask = random_mask(0, masklen, polynomial_degree, maskseed);
     uint maskbits[masklen];
     uint imaskbits[imasklen];
     gen_mask_bits(mask, maskbits,polynomial_degree,1);
