@@ -188,7 +188,6 @@ PUREFUN inline bool operator==(const clay_poly& x, const clay_poly& y)
 
 template <class K, class V> using layer = map_t<K, V>;
 
-set_t<clay_poly> collision_layer[THREADS][THREADS];
 map_t<imask_t, clay_poly> collision_layer[THREADS][THREADS];
 
 void in_memory_generate(uint32_t thread)
@@ -233,7 +232,6 @@ void in_memory_generate(uint32_t thread)
 #ifdef DEBUG_MESSAGES
                 added++;
 #endif
-                clay_poly claypoly = {pexp, exponent2};
                 auto [it2, result] = collision_layer[thread][phi(py)].try_emplace(
                     imaskxor, clay_poly{pexp, exponent2}
                 );
