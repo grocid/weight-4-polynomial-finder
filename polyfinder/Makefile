@@ -7,7 +7,7 @@ CXXFLAGS=-O3 -Wall -Wextra -pedantic -pthread -lboost_system -std=c++17 -march=n
 
 all: square_mt
 
-square_mt: square.cpp gf2_monomial.cpp common.cpp stringops.cpp parallel_hashmap/phmap.h
+square_mt: square.cpp gf2_monomial.cpp common.cpp stringops.cpp parallel_hashmap/phmap.h config.h
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $<
 
 clean:
