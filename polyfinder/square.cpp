@@ -18,10 +18,8 @@
 
 #include "config.h"
 
-#include "gf2_monomial.cpp"
-#include "common.cpp"
 #include "stringops.cpp"
-
+#include "masks.hpp"
 
 #define LAYER_SIZE (THREADS*THREADS)
 
@@ -30,44 +28,13 @@
 #define CHUNK_SIZE (1 << 25)
 
 using namespace std;
-typedef unsigned __int128 uint128_t;
 
-static constexpr uint32_t polynomial_degree = get_degree(POLY);
 static constexpr uint64_t total_map_size = (uint64_t)(((uint64_t)1 << (polynomial_degree/3 + BETA)) * ALPHA);
 static constexpr uint64_t exp_len = (get_degree(total_map_size) + 8) / 8;
-static constexpr uint64_t masklen = polynomial_degree/3-2;
-static constexpr uint64_t imasklen = (polynomial_degree+1)-masklen;
-static constexpr uint64_t masklenb = (masklen+7)/8;
-static constexpr uint64_t imasklenb = (imasklen+7)/8;
 
-static uint128_t mask;
-
-inline uint32_t phi(uint128_t val)
+PUREFUN inline constexpr uint32_t phi(uint128_t val)
 {
     return val % THREADS;
-}
-
-//Find the relative positions of the mask bits
-inline void gen_mask_bits(uint128_t mask, int maskbits[128], uint32_t f, bool match) {
-    int masklen = 0;
-    int last = 0;
-    for (int i = 0; i < (int)f+1; i++) {
-        if((mask & 1) == match) {
-            maskbits[masklen++]=i-last;
-            last = i;
-        }
-        mask >>= 1;
-    }
-}
-
-//Extract only the masked bits
-inline uint128_t get_mask_bits(const int masklen, const int maskbits[128], uint128_t px) {
-    uint128_t rv = 0;
-    for (int i = 0; i < masklen; i++) {
-        px >>= maskbits[i];
-        rv |= (((uint64_t)px)&1)<<i;
-    }
-    return rv;
 }
 
 #ifdef __GNUC__
@@ -212,12 +179,6 @@ void in_memory_generate(uint128_t mask, uint32_t thread)
     uint32_t added = 0;
 #endif
     uint128_t px = 1;
-    const uint32_t f = get_degree(POLY);
-    int maskbits[masklen];
-    int imaskbits[imasklen];
-    gen_mask_bits(mask, maskbits,f,1);
-    gen_mask_bits(mask, imaskbits,f,0);
-
     map_t<mask_t, cmap_poly> collision_map;
     
     for(uint64_t i = 0; i < total_map_size; ++i)
@@ -225,13 +186,14 @@ void in_memory_generate(uint128_t mask, uint32_t thread)
         // every thread considers each monomial in the range
         // but it will only work with monomials that match
         // the phi condition.
-        idx = phi(px & mask);
+        uint128_t mpx = get_mask_bits(px);
+        idx = phi(mpx);
 
         if (unlikely(idx == thread))
         {
             exp_t pexp = pack_exp(exponent);
-            mask_t mbits = pack_mask(get_mask_bits(masklen,maskbits,px));
-            imask_t imbits = pack_imask(get_mask_bits(imasklen,imaskbits,px));
+            mask_t mbits = pack_mask(mpx);
+            imask_t imbits = pack_imask(get_imask_bits(px));
             auto [it, result] = collision_map.try_emplace(
                 mbits, cmap_poly{imbits, pexp}
             );
@@ -262,7 +224,7 @@ void in_memory_generate(uint128_t mask, uint32_t thread)
             }
         }
 
-        px = next_monomial(px, POLY, f);
+        px = next_monomial(px, POLY, polynomial_degree);
         exponent++;
     }
 #ifdef DEBUG_MESSAGES
@@ -442,8 +404,6 @@ void thread_merge()
 
 int main() 
 { 
-    mask = random_mask(0, polynomial_degree/3-2, polynomial_degree, SEED);
-
     cout << "Polynomial:  " << polynomial_representation(POLY).str() << endl;
     cout << "Degree:      " << polynomial_degree << endl;
     cout << "Alpha:       " << ALPHA << endl;

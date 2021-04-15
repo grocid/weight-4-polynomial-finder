@@ -1,6 +1,3 @@
-typedef unsigned __int128 uint128_t;
-
-
 #ifdef __GNUC__
 #define PUREFUN [[gnu::pure]]
 #define likely(x)       __builtin_expect((x),1)
