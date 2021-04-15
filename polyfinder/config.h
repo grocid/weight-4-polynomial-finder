@@ -26,7 +26,7 @@ __extension__ typedef unsigned __int128 uint128_t;
 #else
 typedef unsigned __int128 uint128_t;
 #endif
-#include "gf2_monomial.cpp"
+#include "utils.cpp"
 
 static constexpr uint32_t polynomial_degree = get_degree(POLY);
 static constexpr uint32_t log_mdrop = get_degree(BUCKETS*THREADS);
@@ -34,3 +34,8 @@ static constexpr uint64_t masklen = polynomial_degree/3-2;
 static constexpr uint64_t imasklen = (polynomial_degree+1)-masklen;
 static constexpr uint64_t masklenb = (masklen-log_mdrop+7)/8;
 static constexpr uint64_t imasklenb = (imasklen+7)/8;
+static constexpr uint128_t pmask = polynomial_degree == 127? ((uint128_t)-1) : (((uint128_t)1) << (polynomial_degree+1))-((uint128_t)1);
+static constexpr uint64_t total_map_size = (uint64_t)(((uint64_t)1 << (polynomial_degree/3 + BETA)) * ALPHA);
+// static constexpr uint64_t total_map_size = (uint64_t)1<<25;
+static constexpr uint64_t exp_len = (get_degree(total_map_size) + 8) / 8;
+

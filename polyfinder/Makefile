@@ -10,10 +10,10 @@ all: square_mt
 masks.hpp: masks
 	./masks > masks.hpp
 
-masks: masks.cpp gf2_monomial.cpp config.h
+masks: masks.cpp config.h utils.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $<
 
-square_mt: square.cpp masks.hpp gf2_monomial.cpp stringops.cpp parallel_hashmap/phmap.h config.h
+square_mt: square.cpp masks.hpp gf2_monomial.cpp stringops.cpp parallel_hashmap/phmap.h config.h utils.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $<
 
 clean:

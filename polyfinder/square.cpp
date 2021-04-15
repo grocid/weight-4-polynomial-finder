@@ -10,6 +10,7 @@
 
 #include "config.h"
 
+#include "gf2_monomial.cpp"
 #include "stringops.cpp"
 #include "masks.hpp"
 
@@ -20,9 +21,6 @@
 #define CHUNK_SIZE (1 << 25)
 
 using namespace std;
-
-static constexpr uint64_t total_map_size = (uint64_t)(((uint64_t)1 << (polynomial_degree/3 + BETA)) * ALPHA);
-static constexpr uint64_t exp_len = (get_degree(total_map_size) + 8) / 8;
 
 PUREFUN inline constexpr uint32_t phi(uint128_t val)
 {
@@ -52,6 +50,7 @@ typedef struct PACKSTRUCT imask_t {
     uint8_t imask[imasklenb];
 } imask_t;
 
+//TODO: is this actually needed anymore?
 typedef struct PACKSTRUCT cmap_poly {
     imask_t imask;
     exp_t exponent;
@@ -148,6 +147,22 @@ namespace std {
             return rv;
         }
     };
+    template<>
+    struct hash<clay_poly>
+    {
+        typedef clay_poly argument_type;
+        typedef size_t result_type;
+        PUREFUN inline result_type operator () (const argument_type& x) const
+        {
+            result_type rv = 0;
+            uint128_t t = get_imask_bits(gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2)));
+            for (uint i = 0; i < imasklen / sizeof(result_type); i++) {
+                rv ^= t;
+                t >>= (sizeof(result_type)-1*8);
+            }
+            return rv;
+        }
+    };
 }
 
 PUREFUN constexpr inline bool operator==(const mask_t& lhs, const mask_t& rhs)
@@ -160,15 +175,21 @@ PUREFUN constexpr inline bool operator==(const imask_t& lhs, const imask_t& rhs)
     return !memcmp(lhs.imask, rhs.imask, imasklenb);
 }
 
+PUREFUN inline bool operator==(const clay_poly& x, const clay_poly& y)
+{
+    return (gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2))) == (gf_exp2(unpack_exp(y.e1))^gf_exp2(unpack_exp(y.e2)));
+}
+
 #define map_t phmap::flat_hash_map
+#define set_t phmap::flat_hash_set
 #define EXTRAARGS phmap::container_internal::hash_default_hash<K>, \
                   phmap::container_internal::hash_default_eq<K>, \
                   std::allocator<std::pair<const K, V>>, 32, phmap::NullMutex
 
 template <class K, class V> using layer = map_t<K, V>;
 
-map_t<imask_t, clay_poly> collision_layer[LAYER_SIZE];
-
+set_t<clay_poly> collision_layer[THREADS][THREADS];
+map_t<imask_t, clay_poly> collision_layer[THREADS][THREADS];
 
 void in_memory_generate(uint32_t thread)
 {
@@ -176,6 +197,7 @@ void in_memory_generate(uint32_t thread)
     uint32_t idx;
 #ifdef DEBUG_MESSAGES
     uint32_t added = 0;
+    uint32_t candidated = 0;
 #endif
     uint128_t px = 1;
     map_t<mask_t, cmap_poly> collision_map[BUCKETS];
@@ -189,6 +211,11 @@ void in_memory_generate(uint32_t thread)
         idx = phi(mpx);
         if (unlikely(idx == thread))
         {
+#ifdef DEBUG_MESSAGES
+            if (gf_exp2(exponent) != px)
+                cerr << "Exponentiation error" << exponent << " " << hexmask_representation(gf_exp2(exponent)).str() << " " << hexmask_representation(px).str() << endl;
+            candidated++;
+#endif
             exp_t pexp = pack_exp(exponent);
             //We already know that the phi matches so drop it
             uint32_t bucket = (mpx / THREADS) % BUCKETS;
@@ -198,17 +225,18 @@ void in_memory_generate(uint32_t thread)
                 mbits, cmap_poly{imbits, pexp}
             );
 
-            if(unlikely(!result))
+            if(likely(!result))
             {
                 imask_t imaskxor = xor_imask(it->second.imask, imbits);
                 uint128_t py = unpack_imask(imaskxor);
                 exp_t exponent2 = it->second.exponent;
-                auto [it2, result] = collision_layer[THREADS * thread + phi(py)].try_emplace(
-                    imaskxor, clay_poly{pexp, exponent2}
-                );
 #ifdef DEBUG_MESSAGES
                 added++;
 #endif
+                clay_poly claypoly = {pexp, exponent2};
+                auto [it2, result] = collision_layer[thread][phi(py)].try_emplace(
+                    imaskxor, clay_poly{pexp, exponent2}
+                );
                 // This is rather unlikely to happen, but if we don't check
                 // then we might miss a multiple.
                 if(unlikely(!result))
@@ -223,28 +251,27 @@ void in_memory_generate(uint32_t thread)
                 }
             }
         }
-
-        px = next_monomial(px, POLY, polynomial_degree);
+        px = next_monomial(px);
         exponent++;
     }
 #ifdef DEBUG_MESSAGES
-    cout << "\tThread " << thread  << " produced " << added << " in first step." << endl;
+    cout << "\tThread " << thread  << " had " << candidated << " and produced " << added << " in first step." << endl;
 #endif
 }
 
 void in_memory_merge(int thread)
 {
-    auto base = collision_layer[THREADS * 0 + thread];
+    auto base = collision_layer[0][thread];
  
     for(int i = 1; i < THREADS; ++i)
     {
-        for (auto& it: collision_layer[THREADS * i + thread])
+        for (auto& it: collision_layer[i][thread])
         {
             auto [it2, result] = base.try_emplace(
                 it.first, it.second
             );
 
-            if(!result)
+            if (unlikely(!result))
             {
                 vector<uint64_t> exponents;
                 exponents.push_back(unpack_exp(it.second.e1));
@@ -255,7 +282,7 @@ void in_memory_merge(int thread)
                 cout << polynomial_representation(exponents).str() << endl;
             }
         }
-        collision_layer[THREADS * i + thread].clear();
+        collision_layer[i][thread].clear();
     }
 }
 
