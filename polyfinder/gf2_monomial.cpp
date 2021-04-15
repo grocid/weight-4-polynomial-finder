@@ -11,15 +11,20 @@ typedef unsigned __int128 uint128_t;
 #define unlikely(x)     (x)
 #endif
 
-#if __GNUC__
-PUREFUN inline uint32_t get_degree(uint128_t px)
+#ifdef __GNUC__
+PUREFUN constexpr inline uint32_t get_degree(uint128_t px)
 {
     unsigned long long hi = px >> 64, lo = px;
-    //NOTE: DO NOT REMOVE the != if you do this becomes a long on 32-bits and results get messed up!
     if (likely(hi != 0))
         return 127-__builtin_clzll(hi);
     else
         return 63-__builtin_clzll(lo|1);
+}
+
+PUREFUN inline uint32_t popcnt128(uint128_t px)
+{
+    unsigned long long hi = px >> 64, lo = px;
+    return __builtin_popcountll(hi) + __builtin_popcountll(lo);
 }
 #else
 PUREFUN inline uint32_t get_degree(uint128_t px)
@@ -37,13 +42,25 @@ PUREFUN inline uint32_t get_degree(uint128_t px)
 
     return degree;
 }
+
+PUREFUN inline uint32_t popcnt128(uint128_t px)
+{
+    uint32_t rv = 0;
+
+    for (uint32_t i = 0; i < 128; ++i)
+    {
+        rv += (px & 0x1);
+        px >>= 1;
+    }
+    return rv;
+}
 #endif
 
-PUREFUN inline uint128_t next_monomial(uint128_t px, uint128_t f, uint128_t poly)
+// px*2
+PUREFUN inline uint128_t next_monomial(uint128_t px, uint128_t poly, uint32_t f)
 {
     px <<= 1;
-    //NOTE: DO NOT REMOVE the != if you do this becomes a long and results get messed up!
-    if (likely((px & f) != 0))
+    if ((px & (((uint128_t)1) << f)) != 0)
         px ^= poly;
     return px;
 }
@@ -52,15 +69,16 @@ PUREFUN inline uint128_t next_monomial(uint128_t px, uint128_t f, uint128_t poly
 /*
     GF(2) polynomial multiplication mod P(x)
 */
-PUREFUN inline uint128_t gf2x_multiply(uint128_t a, uint128_t b, uint128_t f, uint128_t poly)
+PUREFUN inline uint128_t gf2x_multiply(uint128_t a, uint128_t b, uint128_t poly, uint32_t f)
 {
-    uint128_t q = b, r = 0;
+    uint128_t r = 0;
 
     for (int i = 0; i < 128; ++i)
     {
-        if ((a & ((uint128_t)1 << i)))
-            r ^= q;
-        q = next_monomial(q,f,poly);
+        if (a&1)
+            r ^= b;
+        a>>=1;
+        b = next_monomial(b,poly,f);
     }
     return r;
 }
@@ -68,9 +86,9 @@ PUREFUN inline uint128_t gf2x_multiply(uint128_t a, uint128_t b, uint128_t f, ui
 /*
     GF(2) polynomial exponentiation mod P(x)
 */
-PUREFUN inline uint128_t gf2x_exp(uint128_t x, uint128_t n, uint128_t poly)
+PUREFUN inline uint128_t gf2x_exp(uint128_t x, uint128_t n, uint128_t poly, uint32_t f)
 {
-    uint128_t y = 1, f = (((uint128_t) 1) << get_degree(poly));
+    uint128_t y = 1;
     for (;n != 0;n >>= 1)
     {
         if (n & 1) // n %2  == 1
@@ -78,4 +96,8 @@ PUREFUN inline uint128_t gf2x_exp(uint128_t x, uint128_t n, uint128_t poly)
         x = gf2x_multiply(x, x, f, poly);
     }
     return y;
+}
+PUREFUN inline uint128_t gf2x_exp(uint128_t x, uint128_t n, uint128_t poly)
+{
+    return gf2x_exp(x, n, poly, get_degree(poly));
 }
