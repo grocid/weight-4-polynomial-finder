@@ -1,6 +1,4 @@
 #include <iostream>
-#include <iomanip>
-#include <sstream>
 #include <thread>
 
 #include <fstream>
@@ -8,13 +6,7 @@
 #include <execution>
 #include <algorithm>
 
-#include <boost/functional/hash.hpp>
 #include "parallel_hashmap/phmap.h"
-
-
-#include <boost/archive/binary_oarchive.hpp>
-#include <boost/archive/binary_iarchive.hpp>
-#include <boost/serialization/vector.hpp>
 
 #include "config.h"
 
@@ -171,7 +163,7 @@ template <class K, class V> using layer = map_t<K, V>;
 map_t<imask_t, clay_poly> collision_layer[LAYER_SIZE];
 
 
-void in_memory_generate(uint128_t mask, uint32_t thread)
+void in_memory_generate(uint32_t thread)
 {
     uint64_t exponent = 0;
     uint32_t idx;
@@ -232,7 +224,7 @@ void in_memory_generate(uint128_t mask, uint32_t thread)
 #endif
 }
 
-void in_memory_merge(uint128_t mask, int thread)
+void in_memory_merge(int thread)
 {
     auto base = collision_layer[THREADS * 0 + thread];
  
@@ -260,18 +252,17 @@ void in_memory_merge(uint128_t mask, int thread)
 }
 
 
-void in_memory_search (uint128_t mask)
+void in_memory_search (void)
 {
     cout << endl << "Running in-memory (square algorithm) search..." << endl;
 #if THREADS > 1
     cout << "[1/2]\t";
 #endif
-
     cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
-    cout << "Using " << (exp_len*8) << " bits for exponents..." << endl;
+
     thread t[THREADS];    
     for (uint32_t i = 0; i < THREADS; ++i) {
-        t[i] = thread(in_memory_generate, mask, i);
+        t[i] = thread(in_memory_generate, i);
     }
 
     for (uint32_t i = 0; i < THREADS; ++i) {
@@ -282,7 +273,7 @@ void in_memory_search (uint128_t mask)
     cout << "[2/2]\tMerging binomials..." << endl << endl;
 
     for (uint32_t i = 0; i < THREADS; ++i) {
-        t[i] = thread(in_memory_merge, mask, i);
+        t[i] = thread(in_memory_merge, i);
     }
 
     for (uint32_t i = 0; i < THREADS; ++i) {
@@ -291,6 +282,7 @@ void in_memory_search (uint128_t mask)
 #endif
 }
 
+#ifndef IN_MEM_GENERATION
 typedef tuple<uint128_t, uint64_t, uint64_t> element_t;
 
 bool comparePolynomialMask(element_t i1, element_t i2) 
@@ -400,7 +392,7 @@ void thread_merge()
 {
 
 }
-
+#endif
 
 int main() 
 { 
@@ -419,9 +411,13 @@ int main()
 #endif
     cout << "Seed:        " << SEED << endl;
     cout << "Mask:        " << hexmask_representation(mask).str() << endl;
-
+    cout << "Mask bits:   " << masklen << endl;
+    cout << "Cmap size:   " << sizeof(pair<mask_t, cmap_poly>) << endl;
+    cout << "Clay size:   " << sizeof(pair<imask_t, clay_poly>) << endl;
+    cout << "Exp size:    " << sizeof(exp_t) << endl;
+    cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
 #ifdef IN_MEM_GENERATION
-    in_memory_search(mask);
+    in_memory_search();
 #else
     thread_generate(mask);
 #endif

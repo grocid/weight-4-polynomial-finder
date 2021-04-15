@@ -1,4 +1,4 @@
-CXXFLAGS=-O3 -Wall -Wextra -pedantic -pthread -lboost_system -std=c++17 -march=native -mtune=native
+CXXFLAGS=-O3 -Wall -Wextra -pedantic -pthread -lboost_system -std=gnu++17 -march=native -mtune=native
 
 #g++ square.cpp -O3 -Wall -pthread -lboost_system -std=c++17 -o square_mt
 

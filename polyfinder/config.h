@@ -19,7 +19,11 @@
 #define POLY ((((uint128_t)1) << 80)|(0xa195150d15*2+1))
 
 // Some constants do not touch after this line
+#ifdef __GNUC__
+__extension__ typedef unsigned __int128 uint128_t;
+#else
 typedef unsigned __int128 uint128_t;
+#endif
 #include "gf2_monomial.cpp"
 
 static constexpr uint32_t polynomial_degree = get_degree(POLY);
