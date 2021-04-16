@@ -43,35 +43,23 @@ PUREFUN static constexpr inline uint128_t gf2x_exp(uint128_t x, uint64_t n)
 
 
 template<int size>
-struct exp2vals{
-  uint128_t arr[size];
-
-  // 'constexpr' constructor:
-  constexpr exp2vals():arr(){
-    if (size > 1) arr[0] = 1;
-    if (size > 2) arr[1] = 2;
-    for(int i = 2; i < size; i++)
-      arr[i] = gf2x_multiply(arr[i-1], arr[i-1]);
-  }
-};
-static constexpr exp2vals arre2 = exp2vals<sizeof(uint128_t)*8+1>();
-
-template<int size>
 struct mul2vals{
   uint128_t arr[size][size];
 
   // 'constexpr' constructor:
   constexpr mul2vals():arr(){
     for(int i = 0; i < size; i++) {
-        arr[i][0] = arre2.arr[i];
+        if (i == 0) arr[i][0] = 1;
+        else if (i == 1) arr[i][0] = 2;
+        else arr[i][0] = gf2x_multiply(arr[i-1][0], arr[i-1][0]);
         for(int j = 1; j < size; j++)
             arr[i][j] = next_monomial(arr[i][j-1]);
     }
   }
 };
-static constexpr mul2vals arrm2 = mul2vals<sizeof(uint128_t)*8+1>();
 
-__attribute__((always_inline)) PUREFUN static constexpr inline uint128_t gf_mul2(uint128_t a,uint32_t iv) {
+__attribute__((always_inline)) PUREFUN static inline uint128_t gf_mul2(uint128_t a,uint32_t iv) {
+    static const mul2vals arrm2 = mul2vals<sizeof(uint128_t)*8+1>();
     uint128_t r = 0;
 
 #pragma GCC unroll 128
