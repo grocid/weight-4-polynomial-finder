@@ -65,8 +65,11 @@ __attribute__((always_inline)) PUREFUN static inline uint128_t gf_mul2(uint128_t
 #pragma GCC unroll 128
     for (uint32_t i = 0; i < polynomial_degree+1; ++i)
     {
-        if (a&(((uint128_t)1) << i))
+        if (unlikely(a == 0))
+            return r;
+        else if (a&1)
             r ^= arrm2.arr[iv][i];
+        a>>=1;
     }
     return r;
 }
@@ -74,16 +77,15 @@ __attribute__((always_inline)) PUREFUN static inline uint128_t gf_mul2(uint128_t
 
 __attribute__ ((noinline)) static uint128_t gf_exp2(uint64_t n)
 {
-    if (unlikely(n==0))
-        return 1;
     uint128_t y = 1;
     #pragma GCC unroll 64
     for (uint32_t i = 0; i < 64; ++i)
     {
-        if (n & 1) // n %2  == 1
-            y = gf_mul2(y,i+1);
-        if (unlikely((n>>=1) == 0))
+        if (unlikely(n==0))
             return y;
+        else if (unlikely(n % 2 == 1))
+            y = gf_mul2(y,i+1);
+        n>>=1;
     }
     return y;
 }
