@@ -56,6 +56,7 @@ typedef struct PACKSTRUCT cmap_poly {
     exp_t exponent;
 } cmap_poly;
 
+//TODO: use a bitpacked representation to save a bit more of space
 typedef struct PACKSTRUCT clay_poly {
     exp_t e1;
     exp_t e2;
@@ -188,7 +189,7 @@ PUREFUN inline bool operator==(const clay_poly& x, const clay_poly& y)
 
 template <class K, class V> using layer = map_t<K, V>;
 
-map_t<imask_t, clay_poly> collision_layer[THREADS][THREADS];
+vector <clay_poly> collision_layer[THREADS][THREADS][COLL_BUCKETS];
 
 void in_memory_generate(uint32_t thread)
 {
@@ -232,21 +233,10 @@ void in_memory_generate(uint32_t thread)
 #ifdef DEBUG_MESSAGES
                 added++;
 #endif
-                auto [it2, result] = collision_layer[thread][phi(py)].try_emplace(
-                    imaskxor, clay_poly{pexp, exponent2}
+                //Since we know the size these will have, maybe use an mmap?
+                collision_layer[thread][phi(py)][iphi(py) % COLL_BUCKETS].emplace_back(
+                    clay_poly{pexp, exponent2}
                 );
-                // This is rather unlikely to happen, but if we don't check
-                // then we might miss a multiple.
-                if(unlikely(!result))
-                {
-                    vector<uint64_t> exponents;
-                    exponents.push_back(unpack_exp(pexp));
-                    exponents.push_back(unpack_exp(exponent2));
-                    exponents.push_back(unpack_exp(it2->second.e1));
-                    exponents.push_back(unpack_exp(it2->second.e2));
-
-                    cout << polynomial_representation(exponents).str() << endl;
-                }
             }
         }
         px = next_monomial(px);
@@ -259,28 +249,37 @@ void in_memory_generate(uint32_t thread)
 
 void in_memory_merge(int thread)
 {
-    auto base = collision_layer[0][thread];
- 
-    for(int i = 1; i < THREADS; ++i)
+    for(int j = 0; j < COLL_BUCKETS; ++j)
     {
-        for (auto& it: collision_layer[i][thread])
-        {
-            auto [it2, result] = base.try_emplace(
-                it.first, it.second
-            );
-
-            if (unlikely(!result))
-            {
-                vector<uint64_t> exponents;
-                exponents.push_back(unpack_exp(it.second.e1));
-                exponents.push_back(unpack_exp(it.second.e2));
-                exponents.push_back(unpack_exp(it2->second.e1));
-                exponents.push_back(unpack_exp(it2->second.e2));
-
-                cout << polynomial_representation(exponents).str() << endl;
-            }
+        map_t <imask_t,clay_poly> base;
+        size_t nelems = 0;
+        for(int i = 1; i < THREADS; ++i) {
+            nelems += collision_layer[i][thread][j].size();
         }
-        collision_layer[i][thread].clear();
+        //By preallocating we ensure we avoid hashes
+        base.reserve(nelems);
+        for(int i = 1; i < THREADS; ++i) {
+            for (auto& it: collision_layer[i][thread][j])
+            {
+                imask_t imask = pack_imask(get_imask_bits(gf_exp2(unpack_exp(it.e1))^gf_exp2(unpack_exp(it.e2))));
+                auto [it2, result] = base.try_emplace(
+                    imask, clay_poly {it}
+                );
+
+                if (unlikely(!result))
+                {
+                    vector<uint64_t> exponents;
+                    exponents.push_back(unpack_exp(it.e1));
+                    exponents.push_back(unpack_exp(it.e2));
+                    exponents.push_back(unpack_exp(it2->second.e1));
+                    exponents.push_back(unpack_exp(it2->second.e2));
+
+                    cout << polynomial_representation(exponents).str() << endl;
+                }
+            }
+            collision_layer[i][thread][j].clear();
+        }
+        base.clear();
     }
 }
 
@@ -288,11 +287,15 @@ void in_memory_merge(int thread)
 void in_memory_search (void)
 {
     cout << endl << "Running in-memory (square algorithm) search..." << endl;
-#if THREADS > 1
-    cout << "[1/2]\t";
-#endif
-    cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
+    cout << "[1/2]\t Generating 2^" << log2(total_map_size) << " monomials..." << endl;
 
+    for (uint32_t i = 0; i < THREADS; ++i) {
+        for (uint32_t j = 0; j < THREADS; ++j) {
+            for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
+                collision_layer[i][j][k].reserve(coll_set_size);
+            }
+        }
+    }
     thread t[THREADS];    
     for (uint32_t i = 0; i < THREADS; ++i) {
         t[i] = thread(in_memory_generate, i);
@@ -302,7 +305,14 @@ void in_memory_search (void)
         t[i].join();
     }
 
-#if THREADS > 1
+    for (uint32_t i = 0; i < THREADS; ++i) {
+        for (uint32_t j = 0; j < THREADS; ++j) {
+            for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
+                collision_layer[i][j][k].reserve(collision_layer[i][j][k].size());
+            }
+        }
+    }
+
     cout << "[2/2]\tMerging binomials..." << endl << endl;
 
     for (uint32_t i = 0; i < THREADS; ++i) {
@@ -312,7 +322,6 @@ void in_memory_search (void)
     for (uint32_t i = 0; i < THREADS; ++i) {
         t[i].join();
     }
-#endif
 }
 
 #ifndef IN_MEM_GENERATION

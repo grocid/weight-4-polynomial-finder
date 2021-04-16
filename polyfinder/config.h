@@ -2,8 +2,9 @@
 
 //This no longer needs to be prime :D
 //TODO use this to distribute the thread local searches (and reduce the cmap size)
-#define BUCKETS (65536/8)
 #define THREADS 8
+#define BUCKETS (65536/THREADS)
+#define COLL_BUCKETS (65536/THREADS)
 #define BETA    1
 #define ALPHA   1
 //#define SEED    (time(NULL)+1)
@@ -21,6 +22,7 @@
 #define POLY ((((uint128_t)1) << 80)|(0xa195150d15*2+1))
 
 // Some constants do not touch after this line
+#include <cstdint>
 #ifdef __GNUC__
 __extension__ typedef unsigned __int128 uint128_t;
 #else
@@ -38,4 +40,5 @@ static constexpr uint128_t pmask = polynomial_degree == 127? ((uint128_t)-1) : (
 static constexpr uint64_t total_map_size = (uint64_t)(((uint64_t)1 << (polynomial_degree/3 + BETA)) * ALPHA);
 // static constexpr uint64_t total_map_size = (uint64_t)1<<25;
 static constexpr uint64_t exp_len = (get_degree(total_map_size) + 8) / 8;
-
+static constexpr uint64_t coll_set_size = total_map_size/(THREADS*THREADS*BUCKETS);
+static constexpr uint64_t base_coll_set_size = total_map_size/(THREADS*BUCKETS);
