@@ -55,7 +55,7 @@ int main()
     gen_mask_bits(mask, maskbits,polynomial_degree,1);
     gen_mask_bits(mask, imaskbits,polynomial_degree,0);
     cout << "#pragma once" << endl;
-    cout << "static constexpr uint128_t mask = (((uint128_t)"<< ((uint64_t)(mask >> 64)) << ") << 64)|((uint128_t)" << ((uint64_t)mask) << ");"<< endl;
+    cout << "static constexpr uint128_t mask = (((uint128_t)"<< ((uint64_t)(mask >> 64)) << "U) << 64)|((uint128_t)" << ((uint64_t)mask) << "U);"<< endl;
     cout << "static constexpr uint64_t maskseed = "<< maskseed << ";"<< endl;
     gen_mask_fun("get_mask_bits",masklen,maskbits);
     gen_mask_fun("get_imask_bits",imasklen,imaskbits);
