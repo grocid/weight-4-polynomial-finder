@@ -78,7 +78,7 @@ PUREFUN constexpr inline uint64_t unpack_exp(const exp_t &exp) {
     return rv;
 }
 
-PUREFUN constexpr inline mask_t pack_mask(uint128_t mask) {
+PUREFUN constexpr inline mask_t pack_mask(mask_int_t mask) {
     mask_t rv = {};
     for (uint i = 0; i < masklenb; i++)
         rv.mask[i] = mask >> (8*i);
@@ -88,14 +88,14 @@ PUREFUN constexpr inline mask_t pack_mask(uint128_t mask) {
 }
 
 
-PUREFUN constexpr inline uint128_t unpack_mask(const mask_t &mask) {
-    uint128_t rv = 0;
+PUREFUN constexpr inline mask_int_t unpack_mask(const mask_t &mask) {
+    mask_int_t rv = 0;
     for (uint i = 0; i < masklenb; i++)
-        rv |= ((uint128_t)mask.mask[i]) <<  (8*i);
+        rv |= ((mask_int_t)mask.mask[i]) <<  (8*i);
     return rv;
 }
 
-PUREFUN constexpr inline imask_t pack_imask(uint128_t imask) {
+PUREFUN constexpr inline imask_t pack_imask(imask_int_t imask) {
    imask_t rv = {};
     for (uint i = 0; i < imasklenb; i++)
         rv.imask[i] = imask >> (8*i);
@@ -103,10 +103,10 @@ PUREFUN constexpr inline imask_t pack_imask(uint128_t imask) {
 }
 
 
-PUREFUN constexpr inline uint128_t unpack_imask(const imask_t &imask) {
-    uint128_t rv = 0;
+PUREFUN constexpr inline imask_int_t unpack_imask(const imask_t &imask) {
+    imask_int_t rv = 0;
     for (uint i = 0; i < imasklenb; i++)
-        rv |= ((uint128_t)imask.imask[i]) <<  (8*i);
+        rv |= ((imask_int_t)imask.imask[i]) <<  (8*i);
     return rv;
 }
 
@@ -156,7 +156,7 @@ namespace std {
         typedef size_t result_type;
         PUREFUN inline result_type operator () (const argument_type& x) const
         {
-            uint128_t t = get_imask_bits(gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2)));
+            imask_int_t t = get_imask_bits(gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2)));
             if constexpr (sizeof(result_type) >= imasklen) {
                 return t;
             } else {
@@ -175,7 +175,7 @@ namespace std {
         typedef size_t result_type;
         PUREFUN inline result_type operator () (const argument_type& x) const
         {
-            uint64_t t = get_mask_bits(gf_exp2(unpack_exp(x.exponent)));
+            mask_int_t t = get_mask_bits(gf_exp2(unpack_exp(x.exponent)));
             if constexpr (sizeof(result_type) >= masklen) {
                 return t;
             } else {
@@ -235,11 +235,12 @@ void in_memory_generate(uint32_t thread)
         // every thread considers each monomial in the range
         // but it will only work with monomials that match
         // the phi condition.
-        uint128_t mpx = get_mask_bits(px);
+        mask_int_t mpx = get_mask_bits(px);
         idx = phi(mpx);
         if (unlikely(idx == thread))
         {
 #ifdef DEBUG_MESSAGES
+            //Ensure exponentiation code is working as it should
             if (gf_exp2(exponent) != px)
                 cerr << "Exponentiation error" << exponent << " " << hexmask_representation(gf_exp2(exponent)).str() << " " << hexmask_representation(px).str() << endl;
             candidated++;
@@ -267,7 +268,7 @@ void in_memory_generate(uint32_t thread)
                 imask_t imaskxor = xor_imask(it->second.imask, imbits);
                 uint128_t py = unpack_imask(imaskxor);
 #else
-                uint128_t py = get_imask_bits(px^gf_exp2(unpack_exp(exponent2)));
+                imask_int_t py = get_imask_bits(px^gf_exp2(unpack_exp(exponent2)));
 #endif
 #ifdef DEBUG_MESSAGES
                 added++;
@@ -494,6 +495,7 @@ int main()
     cout << "Mask:        " << hexmask_representation(mask).str() << endl;
     cout << "Mask bits:   " << masklen << endl;
     cout << "l2(mred):    " << log_mdrop << endl;
+    cout << "Exp bsize:   " << exp_bit_len << endl;
     cout << "Exp size:    " << sizeof(exp_t) << endl;
     cout << "Cmap_p size: " << sizeof(cmap_poly) << endl;
     cout << "Cmap size:   " << sizeof(pair<mask_t, cmap_poly>) << endl;

@@ -41,6 +41,7 @@ inline void gen_mask_bits(uint128_t mask, uint maskbits[128], uint32_t f, bool m
 inline void gen_mask_fun(const char *name, const int masklen, const uint maskbits[128]) {
     int maskbound = 0; // Shift for the high level bits mask
     unsigned long long masklo=0, maskhi=0;
+    const char * maskinttype = masklen > 64 ? "uint128_t" : "uint64_t";
     while (maskbound < masklen && maskbits[maskbound] < 64) maskbound ++;
     for (int i = 0; i < maskbound; i++) {
         masklo |= ((unsigned long long)1) <<  maskbits[i];
@@ -48,16 +49,17 @@ inline void gen_mask_fun(const char *name, const int masklen, const uint maskbit
     for (int i = maskbound; i < masklen; i++) {
         maskhi |= ((unsigned long long)1) <<  maskbits[i];
     }
+    cout << "typedef "<< maskinttype <<" " << name << "_int_t;" << endl;
     cout << "#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__)) && defined(__BMI2__)" <<endl;
-    cout << "PUREFUN constexpr inline uint128_t " << name << "(uint128_t px) { return ";
+    cout << "PUREFUN constexpr inline " << maskinttype << " get_" << name << "_bits(uint128_t px) { return ";
     if (maskbound < masklen)
-        cout << "(((uint128_t)__builtin_ia32_pext_di((unsigned long long)(px>>64),(unsigned long long)" << maskhi << "U)) << " << maskbound << ") |";
-    cout << "((uint128_t)__builtin_ia32_pext_di((unsigned long long)px,(unsigned long long)" << masklo << "U))";
+        cout << "(((" << maskinttype << ")__builtin_ia32_pext_di((unsigned long long)(px>>64),(unsigned long long)" << maskhi << "U)) << " << maskbound << ") |";
+    cout << "((" << maskinttype << ")__builtin_ia32_pext_di((unsigned long long)px,(unsigned long long)" << masklo << "U))";
     cout << "; }" << endl;
     cout << "#else" <<endl;
-    cout << "PUREFUN constexpr inline uint128_t " << name << "(uint128_t px) { return (uint128_t) 0 ";
+    cout << "PUREFUN constexpr inline " << maskinttype << " get_" << name << "_bits(uint128_t px) { return (" << maskinttype << ") 0 ";
     for (int i = 0; i < masklen; i++) {
-        cout << "| (((px >> " << maskbits[i]-i << ") & (((uint128_t)1) << "<< i <<"))) ";
+        cout << "| ((((" << maskinttype << ")(px >> " << maskbits[i]-i << ")) & (((" << maskinttype << ")1) << "<< i <<"))) ";
     }
     cout << "; }" << endl;
     cout << "#endif" <<endl;
@@ -74,7 +76,7 @@ int main()
     cout << "#pragma once" << endl;
     cout << "static constexpr uint128_t mask = (((uint128_t)"<< ((uint64_t)(mask >> 64)) << "U) << 64)|((uint128_t)" << ((uint64_t)mask) << "U);"<< endl;
     cout << "static constexpr uint64_t maskseed = "<< maskseed << ";"<< endl;
-    gen_mask_fun("get_mask_bits",masklen,maskbits);
-    gen_mask_fun("get_imask_bits",imasklen,imaskbits);
+    gen_mask_fun("mask",masklen,maskbits);
+    gen_mask_fun("imask",imasklen,imaskbits);
     return 0;
 } 
