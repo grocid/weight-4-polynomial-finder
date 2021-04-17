@@ -3,7 +3,6 @@
 //This no longer needs to be prime :D
 //TODO use this to distribute the thread local searches (and reduce the cmap size)
 #define THREADS 8
-#define BUCKETS (65536/THREADS)
 #define COLL_BUCKETS (65536/THREADS)
 #define BETA    1
 #define ALPHA   1
@@ -32,7 +31,7 @@
 #include "utils.cpp"
 
 static constexpr uint32_t polynomial_degree = get_degree(POLY);
-static constexpr uint32_t log_mdrop = get_degree(BUCKETS*THREADS);
+static constexpr uint32_t log_mdrop = get_degree(THREADS);
 static constexpr uint64_t masklen = polynomial_degree/3-2;
 static constexpr uint64_t imasklen = (polynomial_degree+1)-masklen;
 static constexpr uint64_t masklenb = (masklen-log_mdrop+7)/8;
@@ -42,6 +41,5 @@ static constexpr uint64_t total_map_size = optimize_map_size((uint64_t)(((uint64
 //Items go from 1 to total_map_size-1 the 0 would mean we have to take away one but we already did so with the optimization
 static constexpr uint64_t exp_bit_len = get_degree(total_map_size-1) + 1;
 static constexpr uint64_t exp_len = (get_degree(total_map_size-1) + 8) / 8;
-static constexpr uint64_t coll_set_size = total_map_size/(THREADS*THREADS*BUCKETS);
-static constexpr uint64_t base_coll_set_size = total_map_size/(THREADS*BUCKETS);
-static constexpr uint64_t stage1_table_len = (1 << masklen) / THREADS;
+static constexpr uint64_t coll_set_size = total_map_size/(THREADS*THREADS*COLL_BUCKETS);
+static constexpr uint64_t stage1_table_len = ((uint64_t)1 << masklen) / THREADS;

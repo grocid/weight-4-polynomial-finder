@@ -1,6 +1,6 @@
 #include <iostream>
 #include <thread>
-
+#include <new>
 #include <fstream>
 
 #include <execution>
@@ -42,10 +42,6 @@ typedef struct PACKSTRUCT exp_t {
     uint8_t exponent[exp_len];
 } exp_t;
 
-typedef struct PACKSTRUCT mask_t {
-    uint8_t mask[masklenb];
-} mask_t;
-
 typedef struct PACKSTRUCT imask_t {
     uint8_t imask[imasklenb];
 } imask_t;
@@ -78,23 +74,6 @@ PUREFUN constexpr inline uint64_t unpack_exp(const exp_t &exp) {
     return rv;
 }
 
-PUREFUN constexpr inline mask_t pack_mask(mask_int_t mask) {
-    mask_t rv = {};
-    for (uint i = 0; i < masklenb; i++)
-        rv.mask[i] = mask >> (8*i);
-    if (unlikely(mask >> (8*masklenb) != 0))
-        cerr << "Error in mask reduction" << endl;
-    return rv;
-}
-
-
-PUREFUN constexpr inline mask_int_t unpack_mask(const mask_t &mask) {
-    mask_int_t rv = 0;
-    for (uint i = 0; i < masklenb; i++)
-        rv |= ((mask_int_t)mask.mask[i]) <<  (8*i);
-    return rv;
-}
-
 PUREFUN constexpr inline imask_t pack_imask(imask_int_t imask) {
    imask_t rv = {};
     for (uint i = 0; i < imasklenb; i++)
@@ -119,21 +98,6 @@ PUREFUN constexpr inline imask_t xor_imask(const imask_t &imask1, const imask_t 
 
 
 namespace std {
-    template<>
-    struct hash<mask_t>
-    {
-        typedef mask_t argument_type;
-        typedef size_t result_type;
-        PUREFUN constexpr inline result_type operator () (const argument_type& x) const
-        {
-            result_type rv = 0;
-            for (uint i = 0; i < masklenb; i++) {
-                rv = rv << 8 | rv >> (sizeof(result_type)-1*8);
-                rv ^= x.mask[i];
-            }
-            return rv;
-        }
-    };
     template<>
     struct hash<imask_t>
     {
@@ -189,11 +153,6 @@ namespace std {
     };
 }
 
-PUREFUN constexpr inline bool operator==(const mask_t& lhs, const mask_t& rhs)
-{
-    return !memcmp(lhs.mask, rhs.mask, masklenb);
-}
-
 PUREFUN constexpr inline bool operator==(const imask_t& lhs, const imask_t& rhs)
 {
     return !memcmp(lhs.imask, rhs.imask, imasklenb);
@@ -228,7 +187,10 @@ void in_memory_generate(uint32_t thread)
     uint32_t candidated = 0;
 #endif
     uint128_t px = 1;
-    map_t<mask_t, cmap_poly> collision_map[BUCKETS];
+    //When total_map_size is significantly larger than 2^masksize using an array is significantly faster and memory efficient
+    //Here we use the trick that exponent will be 0 when the element has not been placed
+    //TODO: we can save even more bits if we use bit sizes instead of byte sizes
+    cmap_poly *collision_map = new cmap_poly[stage1_table_len];
     
     for(uint64_t i = 0; i < total_map_size; ++i)
     {
@@ -236,52 +198,47 @@ void in_memory_generate(uint32_t thread)
         // but it will only work with monomials that match
         // the phi condition.
         mask_int_t mpx = get_mask_bits(px);
-        idx = phi(mpx);
+        idx = mpx % THREADS;
         if (unlikely(idx == thread))
         {
+            mpx /= THREADS; //Reduce mpx to the real number of elements
 #ifdef DEBUG_MESSAGES
             //Ensure exponentiation code is working as it should
             if (gf_exp2(exponent) != px)
                 cerr << "Exponentiation error" << exponent << " " << hexmask_representation(gf_exp2(exponent)).str() << " " << hexmask_representation(px).str() << endl;
             candidated++;
 #endif
-            exp_t pexp = pack_exp(exponent);
-            //We already know that the phi matches so drop it
-            uint32_t bucket = (mpx / THREADS) % BUCKETS;
-            mask_t mbits = pack_mask(mpx / (THREADS*BUCKETS));
 #if !CMAP_DROP_IMASK
             imask_t imbits = pack_imask(get_imask_bits(px));
 #endif
-            auto [it, result] = collision_map[bucket].try_emplace(
-                mbits,
-                cmap_poly{
+            uint64_t exponent2 = unpack_exp(collision_map[mpx].exponent);
+            //If element with that mask not present already
+            if (unlikely(exponent2 == 0)) {
+                collision_map[mpx].exponent = pack_exp(exponent+1); //So 0 is kept correctly
 #if !CMAP_DROP_IMASK
-                    imbits,
+                collision_map[mpx].imask = imbits;
 #endif
-                    pexp}
-            );
-
-            if(likely(!result))
-            {
-                exp_t exponent2 = it->second.exponent;
+            } else {
+                exponent2 -= 1; // Normalize to the right value
 #if !CMAP_DROP_IMASK
-                imask_t imaskxor = xor_imask(it->second.imask, imbits);
-                uint128_t py = unpack_imask(imaskxor);
+                imask_t imaskxor = xor_imask(collision_map[mpx].imask, imbits);
+                imask_int_t py = unpack_imask(imaskxor);
 #else
-                imask_int_t py = get_imask_bits(px^gf_exp2(unpack_exp(exponent2)));
+                imask_int_t py = get_imask_bits(px^gf_exp2(exponent2));
 #endif
 #ifdef DEBUG_MESSAGES
                 added++;
 #endif
                 //Since we know the size these will have, maybe use an mmap?
                 collision_layer[thread][phi(py)][iphi(py) % COLL_BUCKETS].emplace_back(
-                    clay_poly{pexp, exponent2}
+                    clay_poly{pack_exp(exponent2), pack_exp(exponent)}
                 );
             }
         }
         px = next_monomial(px);
         exponent++;
     }
+    delete [] collision_map;
 #ifdef DEBUG_MESSAGES
     cout << "\tThread " << thread  << " had " << candidated << " and produced " << added << " in first step." << endl;
 #endif
@@ -494,11 +451,9 @@ int main()
     cout << "Seed:        " << SEED << endl;
     cout << "Mask:        " << hexmask_representation(mask).str() << endl;
     cout << "Mask bits:   " << masklen << endl;
-    cout << "l2(mred):    " << log_mdrop << endl;
     cout << "Exp bsize:   " << exp_bit_len << endl;
     cout << "Exp size:    " << sizeof(exp_t) << endl;
-    cout << "Cmap_p size: " << sizeof(cmap_poly) << endl;
-    cout << "Cmap size:   " << sizeof(pair<mask_t, cmap_poly>) << endl;
+    cout << "Cmap size:   " << sizeof(cmap_poly) << endl;
     cout << "Bino size:   " << sizeof(clay_poly) << endl;
     cout << "Clay size:   " << sizeof(pair<imask_t, clay_poly>) << endl;
     cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
