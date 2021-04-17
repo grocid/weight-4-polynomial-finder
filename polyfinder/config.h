@@ -38,8 +38,10 @@ static constexpr uint64_t imasklen = (polynomial_degree+1)-masklen;
 static constexpr uint64_t masklenb = (masklen-log_mdrop+7)/8;
 static constexpr uint64_t imasklenb = (imasklen+7)/8;
 static constexpr uint128_t pmask = polynomial_degree == 127? ((uint128_t)-1) : (((uint128_t)1) << (polynomial_degree+1))-((uint128_t)1);
-static constexpr uint64_t total_map_size = (uint64_t)(((uint64_t)1 << (polynomial_degree/3 + BETA)) * ALPHA);
-// static constexpr uint64_t total_map_size = (uint64_t)1<<25;
-static constexpr uint64_t exp_len = (get_degree(total_map_size) + 8) / 8;
+static constexpr uint64_t total_map_size = optimize_map_size((uint64_t)(((uint64_t)1 << (polynomial_degree/3 + BETA)) * ALPHA));
+//Items go from 1 to total_map_size-1 the 0 would mean we have to take away one but we already did so with the optimization
+static constexpr uint64_t exp_bit_len = get_degree(total_map_size-1) + 1;
+static constexpr uint64_t exp_len = (get_degree(total_map_size-1) + 8) / 8;
 static constexpr uint64_t coll_set_size = total_map_size/(THREADS*THREADS*BUCKETS);
 static constexpr uint64_t base_coll_set_size = total_map_size/(THREADS*BUCKETS);
+static constexpr uint64_t stage1_table_len = (1 << masklen) / THREADS;
