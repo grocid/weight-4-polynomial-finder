@@ -23,11 +23,6 @@
 
 // Some constants do not touch after this line
 #include <cstdint>
-#ifdef __GNUC__
-__extension__ typedef unsigned __int128 uint128_t;
-#else
-typedef unsigned __int128 uint128_t;
-#endif
 #include "utils.cpp"
 
 static constexpr uint32_t polynomial_degree = get_degree(POLY);
