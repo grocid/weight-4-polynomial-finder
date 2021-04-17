@@ -50,7 +50,6 @@ typedef struct PACKSTRUCT imask_t {
     uint8_t imask[imasklenb];
 } imask_t;
 
-//TODO: is this actually needed anymore?
 typedef struct PACKSTRUCT cmap_poly {
     imask_t imask;
     exp_t exponent;
@@ -155,13 +154,35 @@ namespace std {
         typedef size_t result_type;
         PUREFUN inline result_type operator () (const argument_type& x) const
         {
-            result_type rv = 0;
             uint128_t t = get_imask_bits(gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2)));
-            for (uint i = 0; i < imasklen / sizeof(result_type); i++) {
-                rv ^= t;
-                t >>= (sizeof(result_type)-1*8);
+            if constexpr (sizeof(result_type) >= imasklen) {
+                return t;
+            } else {
+                result_type rv = t;
+                for (uint i = 1; i < (masklen + sizeof(result_type) -1)  / sizeof(result_type); i++) {
+                    rv ^= t >> (i*(sizeof(result_type)*8));
+                }
+                return rv;
             }
-            return rv;
+        }
+    };
+    template<>
+    struct hash<cmap_poly>
+    {
+        typedef cmap_poly argument_type;
+        typedef size_t result_type;
+        PUREFUN inline result_type operator () (const argument_type& x) const
+        {
+            uint64_t t = get_mask_bits(gf_exp2(unpack_exp(x.exponent)));
+            if constexpr (sizeof(result_type) >= masklen) {
+                return t;
+            } else {
+                result_type rv = t;
+                for (uint i = 1; i < (masklen + sizeof(result_type) -1)  / sizeof(result_type); i++) {
+                    rv ^= t >> (i*(sizeof(result_type)*8));
+                }
+                return rv;
+            }
         }
     };
 }
@@ -179,6 +200,11 @@ PUREFUN constexpr inline bool operator==(const imask_t& lhs, const imask_t& rhs)
 PUREFUN inline bool operator==(const clay_poly& x, const clay_poly& y)
 {
     return (gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2))) == (gf_exp2(unpack_exp(y.e1))^gf_exp2(unpack_exp(y.e2)));
+}
+
+PUREFUN inline bool operator==(const cmap_poly& x, const cmap_poly& y)
+{
+    return (gf_exp2(unpack_exp(x.exponent))& mask)==((gf_exp2(unpack_exp(y.exponent)))& mask);
 }
 
 #define map_t phmap::flat_hash_map
@@ -227,9 +253,9 @@ void in_memory_generate(uint32_t thread)
 
             if(likely(!result))
             {
+                exp_t exponent2 = it->second.exponent;
                 imask_t imaskxor = xor_imask(it->second.imask, imbits);
                 uint128_t py = unpack_imask(imaskxor);
-                exp_t exponent2 = it->second.exponent;
 #ifdef DEBUG_MESSAGES
                 added++;
 #endif
@@ -455,9 +481,11 @@ int main()
     cout << "Mask:        " << hexmask_representation(mask).str() << endl;
     cout << "Mask bits:   " << masklen << endl;
     cout << "l2(mred):    " << log_mdrop << endl;
-    cout << "Cmap size:   " << sizeof(pair<mask_t, cmap_poly>) << endl;
-    cout << "Clay size:   " << sizeof(pair<imask_t, clay_poly>) << endl;
     cout << "Exp size:    " << sizeof(exp_t) << endl;
+    cout << "Cmap_p size: " << sizeof(cmap_poly) << endl;
+    cout << "Cmap size:   " << sizeof(pair<mask_t, cmap_poly>) << endl;
+    cout << "Bino size:   " << sizeof(clay_poly) << endl;
+    cout << "Clay size:   " << sizeof(pair<imask_t, clay_poly>) << endl;
     cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
 #ifdef IN_MEM_GENERATION
     in_memory_search();
