@@ -51,7 +51,9 @@ typedef struct PACKSTRUCT imask_t {
 } imask_t;
 
 typedef struct PACKSTRUCT cmap_poly {
+#if !CMAP_DROP_IMASK
     imask_t imask;
+#endif
     exp_t exponent;
 } cmap_poly;
 
@@ -246,16 +248,27 @@ void in_memory_generate(uint32_t thread)
             //We already know that the phi matches so drop it
             uint32_t bucket = (mpx / THREADS) % BUCKETS;
             mask_t mbits = pack_mask(mpx / (THREADS*BUCKETS));
+#if !CMAP_DROP_IMASK
             imask_t imbits = pack_imask(get_imask_bits(px));
+#endif
             auto [it, result] = collision_map[bucket].try_emplace(
-                mbits, cmap_poly{imbits, pexp}
+                mbits,
+                cmap_poly{
+#if !CMAP_DROP_IMASK
+                    imbits,
+#endif
+                    pexp}
             );
 
             if(likely(!result))
             {
                 exp_t exponent2 = it->second.exponent;
+#if !CMAP_DROP_IMASK
                 imask_t imaskxor = xor_imask(it->second.imask, imbits);
                 uint128_t py = unpack_imask(imaskxor);
+#else
+                uint128_t py = get_imask_bits(px^gf_exp2(unpack_exp(exponent2)));
+#endif
 #ifdef DEBUG_MESSAGES
                 added++;
 #endif

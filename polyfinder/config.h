@@ -9,6 +9,12 @@
 #define ALPHA   1
 //#define SEED    (time(NULL)+1)
 #define SEED    (1618440951)
+// You may want to set these to 1 when 2^x exponentiation is fast
+
+// Drop the inverse mask from the data stored in the hash
+// this gains imasklenb bytes per entry (up to max(2^masklen,total_map_size))
+// at the expense of one 2^x exponentiation per generated binomial
+#define CMAP_DROP_IMASK 1
 
 //#define DEBUG_MESSAGES 1
 #define IN_MEM_GENERATION 1
