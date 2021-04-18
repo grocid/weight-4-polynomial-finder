@@ -111,7 +111,7 @@ namespace std {
         typedef size_t result_type;
         PUREFUN inline result_type operator () (const argument_type& x) const
         {
-            imask_int_t t = get_imask_bits(gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2)));
+            imask_int_t t = get_imask_bits(gf_exp2_xor_2(unpack_exp(x.e1),unpack_exp(x.e2)));
             if constexpr (sizeof(result_type) >= imasklen) {
                 return t;
             } else {
@@ -151,12 +151,12 @@ PUREFUN constexpr inline bool operator==(const imask_t& lhs, const imask_t& rhs)
 
 PUREFUN inline bool operator==(const clay_poly& x, const clay_poly& y)
 {
-    return (gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2))) == (gf_exp2(unpack_exp(y.e1))^gf_exp2(unpack_exp(y.e2)));
+    return (gf_exp2_xor_2(unpack_exp(x.e1),unpack_exp(x.e2))) == (gf_exp2_xor_2(unpack_exp(y.e1),unpack_exp(y.e2)));
 }
 
 PUREFUN inline bool operator==(const cmap_poly& x, const cmap_poly& y)
 {
-    return (gf_exp2(unpack_exp(x.exponent))& mask)==((gf_exp2(unpack_exp(y.exponent)))& mask);
+    return (gf_exp2_xor_2(unpack_exp(x.exponent),unpack_exp(y.exponent))& mask) == 0;
 }
 
 #define map_t phmap::flat_hash_map
@@ -252,7 +252,7 @@ static inline void in_memory_merge(int threadid, uint64_t bucket)
     for(int i = 1; i < THREADS; ++i) {
         for (auto& it: collision_layer[i][bucket])
         {
-            imask_t imask = pack_imask(get_imask_bits(gf_exp2(unpack_exp(it.e1))^gf_exp2(unpack_exp(it.e2))));
+            imask_t imask = pack_imask(get_imask_bits(gf_exp2_xor_2(unpack_exp(it.e1),unpack_exp(it.e2))));
             auto [it2, result] = base.try_emplace(
                 imask, clay_poly {it}
             );
