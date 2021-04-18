@@ -1,4 +1,5 @@
 #include <iostream>
+#include <atomic>
 #include <thread>
 #include <new>
 #include <fstream>
@@ -14,23 +15,13 @@
 #include "stringops.cpp"
 #include "masks.hpp"
 
-#define LAYER_SIZE (THREADS*THREADS)
+#define LAYER_SIZE (THREADS*COLL_BUCKETS)
 
 // Chunk size is the total number of elements contained in memory
 // at the same time, which equates to how much RAM is available.
 #define CHUNK_SIZE (1 << 25)
 
 using namespace std;
-
-PUREFUN inline constexpr uint32_t phi(uint128_t val)
-{
-    return val % THREADS;
-}
-
-PUREFUN inline constexpr uint128_t iphi(uint128_t val)
-{
-    return val / THREADS;
-}
 
 #ifdef __GNUC__
 #define PACKSTRUCT __attribute__((__packed__))
@@ -176,9 +167,11 @@ PUREFUN inline bool operator==(const cmap_poly& x, const cmap_poly& y)
 
 template <class K, class V> using layer = map_t<K, V>;
 
-vector <clay_poly> collision_layer[THREADS][THREADS][COLL_BUCKETS];
+//TODO: This is heavily limited by things like bss size, there are probably better ways to go around this
+//Maybe being smart in using mmap can help with this issue
+vector <clay_poly> collision_layer[THREADS][COLL_BUCKETS];
 
-void in_memory_generate(uint32_t thread)
+static inline void in_memory_generate(int threadid, uint64_t task)
 {
     uint64_t exponent = 0;
     uint32_t idx;
@@ -190,6 +183,7 @@ void in_memory_generate(uint32_t thread)
     //When total_map_size is significantly larger than 2^masksize using an array is significantly faster and memory efficient
     //Here we use the trick that exponent will be 0 when the element has not been placed
     //TODO: we can save even more bits if we use bit sizes instead of byte sizes
+    //TODO: I suspect the major slowdown here comes from TLB misses. We could use hugepages to see an improvement at the expense of physical memory.
     cmap_poly *collision_map = new cmap_poly[stage1_table_len];
     
     for(uint64_t i = 0; i < total_map_size; ++i)
@@ -198,10 +192,11 @@ void in_memory_generate(uint32_t thread)
         // but it will only work with monomials that match
         // the phi condition.
         mask_int_t mpx = get_mask_bits(px);
-        idx = mpx % THREADS;
-        if (unlikely(idx == thread))
+        idx = mpx % STAGE1_TASKS;
+        //TODO: we may be able to achieve greater polynomial exponentiation speeds by using arrays of polynomials instead of single ones
+        if (unlikely(idx == task))
         {
-            mpx /= THREADS; //Reduce mpx to the real number of elements
+            mpx /= STAGE1_TASKS; //Reduce mpx to the real number of elements
 #ifdef DEBUG_MESSAGES
             //Ensure exponentiation code is working as it should
             if (gf_exp2(exponent) != px)
@@ -230,7 +225,7 @@ void in_memory_generate(uint32_t thread)
                 added++;
 #endif
                 //Since we know the size these will have, maybe use an mmap?
-                collision_layer[thread][phi(py)][iphi(py) % COLL_BUCKETS].emplace_back(
+                collision_layer[threadid][py % COLL_BUCKETS].emplace_back(
                     clay_poly{pack_exp(exponent2), pack_exp(exponent)}
                 );
             }
@@ -244,39 +239,57 @@ void in_memory_generate(uint32_t thread)
 #endif
 }
 
-void in_memory_merge(int thread)
+static inline void in_memory_merge(int threadid, uint64_t bucket)
 {
-    for(int j = 0; j < COLL_BUCKETS; ++j)
-    {
-        map_t <imask_t,clay_poly> base;
-        size_t nelems = 0;
-        for(int i = 1; i < THREADS; ++i) {
-            nelems += collision_layer[i][thread][j].size();
-        }
-        //By preallocating we ensure we avoid hashes
-        base.reserve(nelems);
-        for(int i = 1; i < THREADS; ++i) {
-            for (auto& it: collision_layer[i][thread][j])
+    UNUSED(threadid);
+    map_t <imask_t,clay_poly> base;
+    size_t nelems = 0;
+    for(int i = 1; i < THREADS; ++i) {
+        nelems += collision_layer[i][bucket].size();
+    }
+    //By preallocating we ensure we avoid hashes
+    base.reserve(nelems);
+    for(int i = 1; i < THREADS; ++i) {
+        for (auto& it: collision_layer[i][bucket])
+        {
+            imask_t imask = pack_imask(get_imask_bits(gf_exp2(unpack_exp(it.e1))^gf_exp2(unpack_exp(it.e2))));
+            auto [it2, result] = base.try_emplace(
+                imask, clay_poly {it}
+            );
+
+            if (unlikely(!result))
             {
-                imask_t imask = pack_imask(get_imask_bits(gf_exp2(unpack_exp(it.e1))^gf_exp2(unpack_exp(it.e2))));
-                auto [it2, result] = base.try_emplace(
-                    imask, clay_poly {it}
-                );
-
-                if (unlikely(!result))
-                {
-                    vector<uint64_t> exponents;
-                    exponents.push_back(unpack_exp(it.e1));
-                    exponents.push_back(unpack_exp(it.e2));
-                    exponents.push_back(unpack_exp(it2->second.e1));
-                    exponents.push_back(unpack_exp(it2->second.e2));
-
-                    cout << polynomial_representation(exponents).str() << endl;
-                }
+                vector<uint64_t> exponents;
+                exponents.push_back(unpack_exp(it.e1));
+                exponents.push_back(unpack_exp(it.e2));
+                exponents.push_back(unpack_exp(it2->second.e1));
+                exponents.push_back(unpack_exp(it2->second.e2));
+                cout << polynomial_representation(exponents).str() << endl;
             }
-            collision_layer[i][thread][j].clear();
         }
-        base.clear();
+        collision_layer[i][bucket].clear();
+    }
+}
+
+
+void in_memory_generate_thread(int threadid) {
+    //HACK: this relies on the fact that we only call this once per execution
+    static atomic_uint_least64_t last_task (0);
+    uint64_t task = 0;
+    //HACK: This will only work as long as STAGE1_TASKS + threads < 2^64 -1
+    while ((task=last_task.fetch_add(1,memory_order_relaxed)) < STAGE1_TASKS) {
+            in_memory_generate(threadid,task);
+    }
+}
+
+
+void in_memory_merge_thread(int threadid) {
+    //HACK: this relies on the fact that we only call this once per execution
+    static atomic_uint_least64_t last_bucket (0);
+    uint64_t bucket = 0;
+    //HACK: This will only work as long as COLL_BUCKETS + threads < 2^64 -1
+    while ((bucket=last_bucket.fetch_add(1,memory_order_relaxed)) < COLL_BUCKETS) {
+            in_memory_merge(threadid,bucket);
     }
 }
 
@@ -286,34 +299,31 @@ void in_memory_search (void)
     cout << endl << "Running in-memory (square algorithm) search..." << endl;
     cout << "[1/2]\t Generating 2^" << log2(total_map_size) << " monomials..." << endl;
 
-    for (uint32_t i = 0; i < THREADS; ++i) {
-        for (uint32_t j = 0; j < THREADS; ++j) {
-            for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
-                collision_layer[i][j][k].reserve(coll_set_size);
-            }
+    for (int i = 0; i < THREADS; ++i) {
+        for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
+            collision_layer[i][k].reserve(coll_set_size);
         }
     }
-    thread t[THREADS];    
-    for (uint32_t i = 0; i < THREADS; ++i) {
-        t[i] = thread(in_memory_generate, i);
+    thread t[THREADS];
+    for (int i = 0; i < THREADS; ++i) {
+        t[i] = thread(in_memory_generate_thread, i);
     }
 
-    for (uint32_t i = 0; i < THREADS; ++i) {
+    for (int i = 0; i < THREADS; ++i) {
         t[i].join();
     }
 
-    for (uint32_t i = 0; i < THREADS; ++i) {
-        for (uint32_t j = 0; j < THREADS; ++j) {
-            for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
-                collision_layer[i][j][k].reserve(collision_layer[i][j][k].size());
-            }
+    //Free any unallocated space
+    for (int i = 0; i < THREADS; ++i) {
+        for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
+            collision_layer[i][k].reserve(collision_layer[i][k].size());
         }
     }
 
     cout << "[2/2]\tMerging binomials..." << endl << endl;
 
     for (uint32_t i = 0; i < THREADS; ++i) {
-        t[i] = thread(in_memory_merge, i);
+        t[i] = thread(in_memory_merge_thread, i);
     }
 
     for (uint32_t i = 0; i < THREADS; ++i) {
@@ -435,27 +445,30 @@ void thread_merge()
 
 int main() 
 { 
-    cout << "Polynomial:  " << polynomial_representation(POLY).str() << endl;
-    cout << "Degree:      " << polynomial_degree << endl;
-    cout << "Alpha:       " << ALPHA << endl;
-    cout << "Beta:        " << BETA << endl;
+    cout << "Polynomial:     " << polynomial_representation(POLY).str() << endl;
+    cout << "Degree:         " << polynomial_degree << endl;
+    cout << "Alpha:          " << ALPHA << endl;
+    cout << "Beta:           " << BETA << endl;
+    cout << "Stage1 tasks:   " << STAGE1_TASKS << endl;
+    cout << "Stage2 buckets: " << COLL_BUCKETS << endl;
 #if THREADS > 1
-    cout << "Threads:     " << THREADS << endl;
+    cout << "Threads:        " << THREADS << endl;
 #ifdef IN_MEM_GENERATION
-    cout << "Buckets:     " << LAYER_SIZE << endl;
+    cout << "Buckets:        " << LAYER_SIZE << endl;
 #else
-    cout << "Chunksize:   " << CHUNK_SIZE << endl;
-    cout << "Chunks:      " << total_map_size/CHUNK_SIZE << endl;
+    cout << "Chunksize:      " << CHUNK_SIZE << endl;
+    cout << "Chunks:         " << total_map_size/CHUNK_SIZE << endl;
 #endif
 #endif
-    cout << "Seed:        " << SEED << endl;
-    cout << "Mask:        " << hexmask_representation(mask).str() << endl;
-    cout << "Mask bits:   " << masklen << endl;
-    cout << "Exp bsize:   " << exp_bit_len << endl;
-    cout << "Exp size:    " << sizeof(exp_t) << endl;
-    cout << "Cmap size:   " << sizeof(cmap_poly) << endl;
-    cout << "Bino size:   " << sizeof(clay_poly) << endl;
-    cout << "Clay size:   " << sizeof(pair<imask_t, clay_poly>) << endl;
+    cout << "Seed:           " << SEED << endl;
+    cout << "Mask:           " << hexmask_representation(mask).str() << endl;
+    cout << "Mask bits:      " << masklen << endl;
+    cout << "~Mask bits:     " << imasklen << endl;
+    cout << "Exp bit-size:   " << exp_bit_len << endl;
+    cout << "Exp size:       " << sizeof(exp_t) << endl;
+    cout << "Cmap size:      " << sizeof(cmap_poly) << endl;
+    cout << "Binomial size:  " << sizeof(clay_poly) << endl;
+    cout << "Clayer size:    " << sizeof(pair<imask_t, clay_poly>) << endl;
     cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
 #ifdef IN_MEM_GENERATION
     in_memory_search();
