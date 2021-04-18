@@ -1,5 +1,8 @@
 #pragma once
 
+//Set this to disable asserts
+#define NDEBUG
+
 //This no longer needs to be prime :D
 //TODO use this to distribute the thread local searches (and reduce the cmap size)
 #define THREADS 8

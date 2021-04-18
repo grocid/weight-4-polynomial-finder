@@ -1,15 +1,15 @@
+#include "config.h"
 #include <iostream>
 #include <atomic>
 #include <thread>
 #include <new>
 #include <fstream>
+#include <cassert>
 
 #include <execution>
 #include <algorithm>
 
 #include "parallel_hashmap/phmap.h"
-
-#include "config.h"
 
 #include "gf2_monomial.cpp"
 #include "stringops.cpp"
@@ -197,10 +197,9 @@ static inline void in_memory_generate(int threadid, uint64_t task)
         if (unlikely(idx == task))
         {
             mpx /= STAGE1_TASKS; //Reduce mpx to the real number of elements
-#ifdef DEBUG_MESSAGES
             //Ensure exponentiation code is working as it should
-            if (gf_exp2(exponent) != px)
-                cerr << "Exponentiation error" << exponent << " " << hexmask_representation(gf_exp2(exponent)).str() << " " << hexmask_representation(px).str() << endl;
+            assert(gf_exp2(exponent) == px);
+#ifdef DEBUG_MESSAGES
             candidated++;
 #endif
 #if !CMAP_DROP_IMASK
