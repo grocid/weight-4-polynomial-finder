@@ -239,6 +239,7 @@ static inline void in_memory_generate(int threadid, uint64_t task)
 #endif
 }
 
+static atomic_bool found_poly (false);
 static inline void in_memory_merge(int threadid, uint64_t bucket)
 {
     UNUSED(threadid);
@@ -265,6 +266,7 @@ static inline void in_memory_merge(int threadid, uint64_t bucket)
                 exponents.push_back(unpack_exp(it2->second.e1));
                 exponents.push_back(unpack_exp(it2->second.e2));
                 cout << polynomial_representation(exponents).str() << endl;
+                found_poly.store(true,memory_order_relaxed);
             }
         }
         collision_layer[i][bucket].clear();
@@ -272,9 +274,8 @@ static inline void in_memory_merge(int threadid, uint64_t bucket)
 }
 
 
+static atomic_uint_least64_t last_task (0);
 void in_memory_generate_thread(int threadid) {
-    //HACK: this relies on the fact that we only call this once per execution
-    static atomic_uint_least64_t last_task (0);
     uint64_t task = 0;
     //HACK: This will only work as long as STAGE1_TASKS + threads < 2^64 -1
     while ((task=last_task.fetch_add(1,memory_order_relaxed)) < STAGE1_TASKS) {
@@ -283,9 +284,8 @@ void in_memory_generate_thread(int threadid) {
 }
 
 
+static atomic_uint_least64_t last_bucket (0);
 void in_memory_merge_thread(int threadid) {
-    //HACK: this relies on the fact that we only call this once per execution
-    static atomic_uint_least64_t last_bucket (0);
     uint64_t bucket = 0;
     //HACK: This will only work as long as COLL_BUCKETS + threads < 2^64 -1
     while ((bucket=last_bucket.fetch_add(1,memory_order_relaxed)) < COLL_BUCKETS) {
@@ -304,6 +304,7 @@ void in_memory_search (void)
             collision_layer[i][k].reserve(coll_set_size);
         }
     }
+    last_task.store(0,memory_order_relaxed);
     thread t[THREADS];
     for (int i = 0; i < THREADS; ++i) {
         t[i] = thread(in_memory_generate_thread, i);
@@ -322,6 +323,7 @@ void in_memory_search (void)
 
     cout << "[2/2]\tMerging binomials..." << endl << endl;
 
+    last_bucket.store(0,memory_order_relaxed);
     for (uint32_t i = 0; i < THREADS; ++i) {
         t[i] = thread(in_memory_merge_thread, i);
     }
@@ -470,11 +472,14 @@ int main()
     cout << "Binomial size:  " << sizeof(clay_poly) << endl;
     cout << "Clayer size:    " << sizeof(pair<imask_t, clay_poly>) << endl;
     cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
+    found_poly.store(false,memory_order_relaxed);
 #ifdef IN_MEM_GENERATION
     in_memory_search();
 #else
     thread_generate(mask);
 #endif
-
-    return 0;
-} 
+    if(found_poly.load(memory_order_relaxed))
+        return 0;
+    else
+        return 1;
+}
