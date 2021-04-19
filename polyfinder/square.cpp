@@ -1,36 +1,27 @@
+#include "config.h"
 #include <iostream>
+#include <atomic>
 #include <thread>
-
+#include <new>
 #include <fstream>
+#include <cassert>
 
 #include <execution>
 #include <algorithm>
 
 #include "parallel_hashmap/phmap.h"
 
-#include "config.h"
-
 #include "gf2_monomial.cpp"
 #include "stringops.cpp"
 #include "masks.hpp"
 
-#define LAYER_SIZE (THREADS*THREADS)
+#define LAYER_SIZE (THREADS*COLL_BUCKETS)
 
 // Chunk size is the total number of elements contained in memory
 // at the same time, which equates to how much RAM is available.
 #define CHUNK_SIZE (1 << 25)
 
 using namespace std;
-
-PUREFUN inline constexpr uint32_t phi(uint128_t val)
-{
-    return val % THREADS;
-}
-
-PUREFUN inline constexpr uint128_t iphi(uint128_t val)
-{
-    return val / THREADS;
-}
 
 #ifdef __GNUC__
 #define PACKSTRUCT __attribute__((__packed__))
@@ -42,17 +33,14 @@ typedef struct PACKSTRUCT exp_t {
     uint8_t exponent[exp_len];
 } exp_t;
 
-typedef struct PACKSTRUCT mask_t {
-    uint8_t mask[masklenb];
-} mask_t;
-
 typedef struct PACKSTRUCT imask_t {
     uint8_t imask[imasklenb];
 } imask_t;
 
-//TODO: is this actually needed anymore?
 typedef struct PACKSTRUCT cmap_poly {
+#if !CMAP_DROP_IMASK
     imask_t imask;
+#endif
     exp_t exponent;
 } cmap_poly;
 
@@ -77,24 +65,7 @@ PUREFUN constexpr inline uint64_t unpack_exp(const exp_t &exp) {
     return rv;
 }
 
-PUREFUN constexpr inline mask_t pack_mask(uint128_t mask) {
-    mask_t rv = {};
-    for (uint i = 0; i < masklenb; i++)
-        rv.mask[i] = mask >> (8*i);
-    if (unlikely(mask >> (8*masklenb) != 0))
-        cerr << "Error in mask reduction" << endl;
-    return rv;
-}
-
-
-PUREFUN constexpr inline uint128_t unpack_mask(const mask_t &mask) {
-    uint128_t rv = 0;
-    for (uint i = 0; i < masklenb; i++)
-        rv |= ((uint128_t)mask.mask[i]) <<  (8*i);
-    return rv;
-}
-
-PUREFUN constexpr inline imask_t pack_imask(uint128_t imask) {
+PUREFUN constexpr inline imask_t pack_imask(imask_int_t imask) {
    imask_t rv = {};
     for (uint i = 0; i < imasklenb; i++)
         rv.imask[i] = imask >> (8*i);
@@ -102,10 +73,10 @@ PUREFUN constexpr inline imask_t pack_imask(uint128_t imask) {
 }
 
 
-PUREFUN constexpr inline uint128_t unpack_imask(const imask_t &imask) {
-    uint128_t rv = 0;
+PUREFUN constexpr inline imask_int_t unpack_imask(const imask_t &imask) {
+    imask_int_t rv = 0;
     for (uint i = 0; i < imasklenb; i++)
-        rv |= ((uint128_t)imask.imask[i]) <<  (8*i);
+        rv |= ((imask_int_t)imask.imask[i]) <<  (8*i);
     return rv;
 }
 
@@ -118,21 +89,6 @@ PUREFUN constexpr inline imask_t xor_imask(const imask_t &imask1, const imask_t 
 
 
 namespace std {
-    template<>
-    struct hash<mask_t>
-    {
-        typedef mask_t argument_type;
-        typedef size_t result_type;
-        PUREFUN constexpr inline result_type operator () (const argument_type& x) const
-        {
-            result_type rv = 0;
-            for (uint i = 0; i < masklenb; i++) {
-                rv = rv << 8 | rv >> (sizeof(result_type)-1*8);
-                rv ^= x.mask[i];
-            }
-            return rv;
-        }
-    };
     template<>
     struct hash<imask_t>
     {
@@ -155,20 +111,37 @@ namespace std {
         typedef size_t result_type;
         PUREFUN inline result_type operator () (const argument_type& x) const
         {
-            result_type rv = 0;
-            uint128_t t = get_imask_bits(gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2)));
-            for (uint i = 0; i < imasklen / sizeof(result_type); i++) {
-                rv ^= t;
-                t >>= (sizeof(result_type)-1*8);
+            imask_int_t t = get_imask_bits(gf_exp2_xor_2(unpack_exp(x.e1),unpack_exp(x.e2)));
+            if constexpr (sizeof(result_type) >= imasklen) {
+                return t;
+            } else {
+                result_type rv = t;
+                for (uint i = 1; i < (masklen + sizeof(result_type) -1)  / sizeof(result_type); i++) {
+                    rv ^= t >> (i*(sizeof(result_type)*8));
+                }
+                return rv;
             }
-            return rv;
         }
     };
-}
-
-PUREFUN constexpr inline bool operator==(const mask_t& lhs, const mask_t& rhs)
-{
-    return !memcmp(lhs.mask, rhs.mask, masklenb);
+    template<>
+    struct hash<cmap_poly>
+    {
+        typedef cmap_poly argument_type;
+        typedef size_t result_type;
+        PUREFUN inline result_type operator () (const argument_type& x) const
+        {
+            mask_int_t t = get_mask_bits(gf_exp2(unpack_exp(x.exponent)));
+            if constexpr (sizeof(result_type) >= masklen) {
+                return t;
+            } else {
+                result_type rv = t;
+                for (uint i = 1; i < (masklen + sizeof(result_type) -1)  / sizeof(result_type); i++) {
+                    rv ^= t >> (i*(sizeof(result_type)*8));
+                }
+                return rv;
+            }
+        }
+    };
 }
 
 PUREFUN constexpr inline bool operator==(const imask_t& lhs, const imask_t& rhs)
@@ -178,7 +151,12 @@ PUREFUN constexpr inline bool operator==(const imask_t& lhs, const imask_t& rhs)
 
 PUREFUN inline bool operator==(const clay_poly& x, const clay_poly& y)
 {
-    return (gf_exp2(unpack_exp(x.e1))^gf_exp2(unpack_exp(x.e2))) == (gf_exp2(unpack_exp(y.e1))^gf_exp2(unpack_exp(y.e2)));
+    return (gf_exp2_xor_2(unpack_exp(x.e1),unpack_exp(x.e2))) == (gf_exp2_xor_2(unpack_exp(y.e1),unpack_exp(y.e2)));
+}
+
+PUREFUN inline bool operator==(const cmap_poly& x, const cmap_poly& y)
+{
+    return (gf_exp2_xor_2(unpack_exp(x.exponent),unpack_exp(y.exponent))& mask) == 0;
 }
 
 #define map_t phmap::flat_hash_map
@@ -189,9 +167,11 @@ PUREFUN inline bool operator==(const clay_poly& x, const clay_poly& y)
 
 template <class K, class V> using layer = map_t<K, V>;
 
-vector <clay_poly> collision_layer[THREADS][THREADS][COLL_BUCKETS];
+//TODO: This is heavily limited by things like bss size, there are probably better ways to go around this
+//Maybe being smart in using mmap can help with this issue
+vector <clay_poly> collision_layer[THREADS][COLL_BUCKETS];
 
-void in_memory_generate(uint32_t thread)
+static inline void in_memory_generate(int threadid, uint64_t task)
 {
     uint64_t exponent = 0;
     uint32_t idx;
@@ -200,86 +180,115 @@ void in_memory_generate(uint32_t thread)
     uint32_t candidated = 0;
 #endif
     uint128_t px = 1;
-    map_t<mask_t, cmap_poly> collision_map[BUCKETS];
+    //When total_map_size is significantly larger than 2^masksize using an array is significantly faster and memory efficient
+    //Here we use the trick that exponent will be 0 when the element has not been placed
+    //TODO: we can save even more bits if we use bit sizes instead of byte sizes
+    //TODO: I suspect the major slowdown here comes from TLB misses. We could use hugepages to see an improvement at the expense of physical memory.
+    cmap_poly *collision_map = new cmap_poly[stage1_table_len];
     
     for(uint64_t i = 0; i < total_map_size; ++i)
     {
         // every thread considers each monomial in the range
         // but it will only work with monomials that match
         // the phi condition.
-        uint128_t mpx = get_mask_bits(px);
-        idx = phi(mpx);
-        if (unlikely(idx == thread))
+        mask_int_t mpx = get_mask_bits(px);
+        idx = mpx % STAGE1_TASKS;
+        //TODO: we may be able to achieve greater polynomial exponentiation speeds by using arrays of polynomials instead of single ones
+        if (unlikely(idx == task))
         {
+            mpx /= STAGE1_TASKS; //Reduce mpx to the real number of elements
+            //Ensure exponentiation code is working as it should
+            assert(gf_exp2(exponent) == px);
 #ifdef DEBUG_MESSAGES
-            if (gf_exp2(exponent) != px)
-                cerr << "Exponentiation error" << exponent << " " << hexmask_representation(gf_exp2(exponent)).str() << " " << hexmask_representation(px).str() << endl;
             candidated++;
 #endif
-            exp_t pexp = pack_exp(exponent);
-            //We already know that the phi matches so drop it
-            uint32_t bucket = (mpx / THREADS) % BUCKETS;
-            mask_t mbits = pack_mask(mpx / (THREADS*BUCKETS));
+#if !CMAP_DROP_IMASK
             imask_t imbits = pack_imask(get_imask_bits(px));
-            auto [it, result] = collision_map[bucket].try_emplace(
-                mbits, cmap_poly{imbits, pexp}
-            );
-
-            if(likely(!result))
-            {
-                imask_t imaskxor = xor_imask(it->second.imask, imbits);
-                uint128_t py = unpack_imask(imaskxor);
-                exp_t exponent2 = it->second.exponent;
+#endif
+            uint64_t exponent2 = unpack_exp(collision_map[mpx].exponent);
+            //If element with that mask not present already
+            if (unlikely(exponent2 == 0)) {
+                collision_map[mpx].exponent = pack_exp(exponent+1); //So 0 is kept correctly
+#if !CMAP_DROP_IMASK
+                collision_map[mpx].imask = imbits;
+#endif
+            } else {
+                exponent2 -= 1; // Normalize to the right value
+#if !CMAP_DROP_IMASK
+                imask_t imaskxor = xor_imask(collision_map[mpx].imask, imbits);
+                imask_int_t py = unpack_imask(imaskxor);
+#else
+                imask_int_t py = get_imask_bits(px^gf_exp2(exponent2));
+#endif
 #ifdef DEBUG_MESSAGES
                 added++;
 #endif
                 //Since we know the size these will have, maybe use an mmap?
-                collision_layer[thread][phi(py)][iphi(py) % COLL_BUCKETS].emplace_back(
-                    clay_poly{pexp, exponent2}
+                collision_layer[threadid][py % COLL_BUCKETS].emplace_back(
+                    clay_poly{pack_exp(exponent2), pack_exp(exponent)}
                 );
             }
         }
         px = next_monomial(px);
         exponent++;
     }
+    delete [] collision_map;
 #ifdef DEBUG_MESSAGES
     cout << "\tThread " << thread  << " had " << candidated << " and produced " << added << " in first step." << endl;
 #endif
 }
 
-void in_memory_merge(int thread)
+static atomic_bool found_poly (false);
+static inline void in_memory_merge(int threadid, uint64_t bucket)
 {
-    for(int j = 0; j < COLL_BUCKETS; ++j)
-    {
-        map_t <imask_t,clay_poly> base;
-        size_t nelems = 0;
-        for(int i = 1; i < THREADS; ++i) {
-            nelems += collision_layer[i][thread][j].size();
-        }
-        //By preallocating we ensure we avoid hashes
-        base.reserve(nelems);
-        for(int i = 1; i < THREADS; ++i) {
-            for (auto& it: collision_layer[i][thread][j])
+    UNUSED(threadid);
+    map_t <imask_t,clay_poly> base;
+    size_t nelems = 0;
+    for(int i = 1; i < THREADS; ++i) {
+        nelems += collision_layer[i][bucket].size();
+    }
+    //By preallocating we ensure we avoid hashes
+    base.reserve(nelems);
+    for(int i = 1; i < THREADS; ++i) {
+        for (auto& it: collision_layer[i][bucket])
+        {
+            imask_t imask = pack_imask(get_imask_bits(gf_exp2_xor_2(unpack_exp(it.e1),unpack_exp(it.e2))));
+            auto [it2, result] = base.try_emplace(
+                imask, clay_poly {it}
+            );
+
+            if (unlikely(!result))
             {
-                imask_t imask = pack_imask(get_imask_bits(gf_exp2(unpack_exp(it.e1))^gf_exp2(unpack_exp(it.e2))));
-                auto [it2, result] = base.try_emplace(
-                    imask, clay_poly {it}
-                );
-
-                if (unlikely(!result))
-                {
-                    vector<uint64_t> exponents;
-                    exponents.push_back(unpack_exp(it.e1));
-                    exponents.push_back(unpack_exp(it.e2));
-                    exponents.push_back(unpack_exp(it2->second.e1));
-                    exponents.push_back(unpack_exp(it2->second.e2));
-
-                    cout << polynomial_representation(exponents).str() << endl;
-                }
+                vector<uint64_t> exponents;
+                exponents.push_back(unpack_exp(it.e1));
+                exponents.push_back(unpack_exp(it.e2));
+                exponents.push_back(unpack_exp(it2->second.e1));
+                exponents.push_back(unpack_exp(it2->second.e2));
+                cout << polynomial_representation(exponents).str() << endl;
+                found_poly.store(true,memory_order_relaxed);
             }
-            collision_layer[i][thread][j].clear();
         }
-        base.clear();
+        collision_layer[i][bucket].clear();
+    }
+}
+
+
+static atomic_uint_least64_t last_task (0);
+void in_memory_generate_thread(int threadid) {
+    uint64_t task = 0;
+    //HACK: This will only work as long as STAGE1_TASKS + threads < 2^64 -1
+    while ((task=last_task.fetch_add(1,memory_order_relaxed)) < STAGE1_TASKS) {
+            in_memory_generate(threadid,task);
+    }
+}
+
+
+static atomic_uint_least64_t last_bucket (0);
+void in_memory_merge_thread(int threadid) {
+    uint64_t bucket = 0;
+    //HACK: This will only work as long as COLL_BUCKETS + threads < 2^64 -1
+    while ((bucket=last_bucket.fetch_add(1,memory_order_relaxed)) < COLL_BUCKETS) {
+            in_memory_merge(threadid,bucket);
     }
 }
 
@@ -289,34 +298,33 @@ void in_memory_search (void)
     cout << endl << "Running in-memory (square algorithm) search..." << endl;
     cout << "[1/2]\t Generating 2^" << log2(total_map_size) << " monomials..." << endl;
 
-    for (uint32_t i = 0; i < THREADS; ++i) {
-        for (uint32_t j = 0; j < THREADS; ++j) {
-            for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
-                collision_layer[i][j][k].reserve(coll_set_size);
-            }
+    for (int i = 0; i < THREADS; ++i) {
+        for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
+            collision_layer[i][k].reserve(coll_set_size);
         }
     }
-    thread t[THREADS];    
-    for (uint32_t i = 0; i < THREADS; ++i) {
-        t[i] = thread(in_memory_generate, i);
+    last_task.store(0,memory_order_relaxed);
+    thread t[THREADS];
+    for (int i = 0; i < THREADS; ++i) {
+        t[i] = thread(in_memory_generate_thread, i);
     }
 
-    for (uint32_t i = 0; i < THREADS; ++i) {
+    for (int i = 0; i < THREADS; ++i) {
         t[i].join();
     }
 
-    for (uint32_t i = 0; i < THREADS; ++i) {
-        for (uint32_t j = 0; j < THREADS; ++j) {
-            for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
-                collision_layer[i][j][k].reserve(collision_layer[i][j][k].size());
-            }
+    //Free any unallocated space
+    for (int i = 0; i < THREADS; ++i) {
+        for (uint32_t k = 0; k < COLL_BUCKETS; ++k) {
+            collision_layer[i][k].reserve(collision_layer[i][k].size());
         }
     }
 
     cout << "[2/2]\tMerging binomials..." << endl << endl;
 
+    last_bucket.store(0,memory_order_relaxed);
     for (uint32_t i = 0; i < THREADS; ++i) {
-        t[i] = thread(in_memory_merge, i);
+        t[i] = thread(in_memory_merge_thread, i);
     }
 
     for (uint32_t i = 0; i < THREADS; ++i) {
@@ -438,32 +446,39 @@ void thread_merge()
 
 int main() 
 { 
-    cout << "Polynomial:  " << polynomial_representation(POLY).str() << endl;
-    cout << "Degree:      " << polynomial_degree << endl;
-    cout << "Alpha:       " << ALPHA << endl;
-    cout << "Beta:        " << BETA << endl;
+    cout << "Polynomial:     " << polynomial_representation(POLY).str() << endl;
+    cout << "Degree:         " << polynomial_degree << endl;
+    cout << "Alpha:          " << ALPHA << endl;
+    cout << "Beta:           " << BETA << endl;
+    cout << "Stage1 tasks:   " << STAGE1_TASKS << endl;
+    cout << "Stage2 buckets: " << COLL_BUCKETS << endl;
 #if THREADS > 1
-    cout << "Threads:     " << THREADS << endl;
+    cout << "Threads:        " << THREADS << endl;
 #ifdef IN_MEM_GENERATION
-    cout << "Buckets:     " << LAYER_SIZE << endl;
+    cout << "Buckets:        " << LAYER_SIZE << endl;
 #else
-    cout << "Chunksize:   " << CHUNK_SIZE << endl;
-    cout << "Chunks:      " << total_map_size/CHUNK_SIZE << endl;
+    cout << "Chunksize:      " << CHUNK_SIZE << endl;
+    cout << "Chunks:         " << total_map_size/CHUNK_SIZE << endl;
 #endif
 #endif
-    cout << "Seed:        " << SEED << endl;
-    cout << "Mask:        " << hexmask_representation(mask).str() << endl;
-    cout << "Mask bits:   " << masklen << endl;
-    cout << "l2(mred):    " << log_mdrop << endl;
-    cout << "Cmap size:   " << sizeof(pair<mask_t, cmap_poly>) << endl;
-    cout << "Clay size:   " << sizeof(pair<imask_t, clay_poly>) << endl;
-    cout << "Exp size:    " << sizeof(exp_t) << endl;
+    cout << "Seed:           " << SEED << endl;
+    cout << "Mask:           " << hexmask_representation(mask).str() << endl;
+    cout << "Mask bits:      " << masklen << endl;
+    cout << "~Mask bits:     " << imasklen << endl;
+    cout << "Exp bit-size:   " << exp_bit_len << endl;
+    cout << "Exp size:       " << sizeof(exp_t) << endl;
+    cout << "Cmap size:      " << sizeof(cmap_poly) << endl;
+    cout << "Binomial size:  " << sizeof(clay_poly) << endl;
+    cout << "Clayer size:    " << sizeof(pair<imask_t, clay_poly>) << endl;
     cout << "Generating 2^" << log2(total_map_size) << " monomials..." << endl;
+    found_poly.store(false,memory_order_relaxed);
 #ifdef IN_MEM_GENERATION
     in_memory_search();
 #else
     thread_generate(mask);
 #endif
-
-    return 0;
-} 
+    if(found_poly.load(memory_order_relaxed))
+        return 0;
+    else
+        return 1;
+}

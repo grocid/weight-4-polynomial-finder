@@ -1,3 +1,4 @@
+#define UNUSED(x) (void)(x)
 #ifdef __GNUC__
 #define PUREFUN [[gnu::pure]]
 #define likely(x)       __builtin_expect((x),1)
@@ -25,13 +26,17 @@ PUREFUN constexpr inline uint32_t get_degree(uint128_t px)
         return 63-__builtin_clzll(lo|1);
 }
 
-PUREFUN inline uint32_t popcnt128(uint128_t px)
+PUREFUN constexpr inline int popcnt128(uint128_t px)
 {
     unsigned long long hi = px >> 64, lo = px;
     return __builtin_popcountll(hi) + __builtin_popcountll(lo);
 }
+PUREFUN constexpr inline int popcnt64(uint64_t px)
+{
+    return __builtin_popcountll((unsigned long long)px);
+}
 #else
-PUREFUN inline uint32_t get_degree(uint128_t px)
+PUREFUN constexpr inline uint32_t get_degree(uint128_t px)
 {
     uint32_t degree = 0;
 
@@ -47,9 +52,9 @@ PUREFUN inline uint32_t get_degree(uint128_t px)
     return degree;
 }
 
-PUREFUN inline uint32_t popcnt128(uint128_t px)
+PUREFUN constexpr inline int popcnt128(uint128_t px)
 {
-    uint32_t rv = 0;
+    int rv = 0;
 
     for (uint32_t i = 0; i < 128; ++i)
     {
@@ -58,7 +63,31 @@ PUREFUN inline uint32_t popcnt128(uint128_t px)
     }
     return rv;
 }
+
+PUREFUN constexpr inline int popcnt64(uint64_t px)
+{
+    int rv = 0;
+
+    for (uint32_t i = 0; i < 64; ++i)
+    {
+        rv += (px & 0x1);
+        px >>= 1;
+    }
+    return rv;
+}
 #endif
+
+//For now this is a very trivial optimization, if the map_size is going to
+//be a power of two drop one element. This is because we use element 0
+//to indicate that the element is not present on the allocated memory
+PUREFUN constexpr inline uint64_t optimize_map_size (uint64_t map_size)
+{
+    if (map_size > (1<<20) && popcnt64(map_size) == 1)
+        return map_size-1;
+    else
+        return map_size;
+}
+
 
 PUREFUN constexpr inline uint32_t get_degree(uint256_t px)
 {
